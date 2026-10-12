@@ -1,4 +1,4 @@
-"""Local furniture catalog. No cloud services or network dependencies."""
+"""Local furniture catalog. Personal data stays local; network is used only for updates."""
 import argparse
 import base64
 import collections

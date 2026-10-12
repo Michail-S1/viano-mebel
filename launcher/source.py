@@ -1,6 +1,7 @@
 """Prepare a clean GitHub checkout with an explicit file list, without user data."""
 import argparse
 import shutil
+import re
 from pathlib import Path
 try:
     from .update import ROOT_FILES, CODE_DIRS, allowed_name
@@ -28,6 +29,7 @@ def source_files(root):
         if path.is_file(): yield path,".github/workflows/"+filename
 
 def prepare_source(root,destination):
+    root_aliases = {str(Path(root).absolute()), str(Path(root).resolve())}
     root,destination=Path(root).resolve(),Path(destination).resolve()
     if destination==root or destination.exists():
         raise ValueError("Укажите новую пустую папку для исходного кода.")
@@ -41,7 +43,9 @@ def prepare_source(root,destination):
         target.parent.mkdir(parents=True,exist_ok=True)
         if path.suffix==".md":
             text=path.read_text(encoding="utf-8-sig")
-            text=text.replace(str(root),"папка проекта").replace(str(root).replace("\\","/"),"папка проекта")
+            for alias in sorted(root_aliases, key=len, reverse=True):
+                for spelling in (alias, alias.replace("\\", "/")):
+                    text=re.sub(re.escape(spelling), lambda match: "папка проекта", text, flags=re.IGNORECASE)
             if name=="README.md":
                 if "## Стартовый каталог" in text:
                     before,after=text.split("## Стартовый каталог",1)

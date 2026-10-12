@@ -44,6 +44,12 @@ class GitHubPreparationTests(unittest.TestCase):
             if file.is_file(): self.assertNotIn(b"PERSONAL-DATA",file.read_bytes(),str(file))
         self.assertNotIn(str(self.root),(target/"PROJECT_PROMPT.md").read_text(encoding="utf-8"))
         self.assertIn("Поиск по размерам",(target/"README.md").read_text(encoding="utf-8"))
+    def test_document_paths_ignore_windows_letter_case_and_separators(self):
+        description="Paths: " + str(self.root).upper() + " and " + str(self.root).replace("\\", "/")
+        (self.root/"PROJECT_PROMPT.md").write_text(description,encoding="utf-8")
+        target=Path(self.tmp.name)/"different-path-spelling"
+        prepare_source(self.root,target)
+        self.assertEqual((target/"PROJECT_PROMPT.md").read_text(encoding="utf-8"),"Paths: папка проекта and папка проекта")
     def test_dependencies_are_included_in_clean_source(self):
         dependency=self.root/"vendor/xlrd/__init__.py"
         dependency.parent.mkdir(parents=True)
