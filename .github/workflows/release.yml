@@ -1,0 +1,42 @@
+name: Publish update
+
+on:
+  push:
+    branches: [main]
+    paths: [server.py]
+    tags: ['v[0-9]*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: viano-release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: windows-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Check version and tag
+        run: python -X utf8 launcher/github_release.py --check-only
+      - name: Catalog tests
+        run: python -X utf8 -m unittest discover -s tests -v
+      - name: Windows launcher
+        shell: powershell
+        run: powershell.exe -NoProfile -ExecutionPolicy Bypass -File tests/test_launcher.ps1
+      - name: JavaScript syntax
+        run: node --check static/app.js
+      - name: Build and publish code-only update
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python -X utf8 launcher/github_release.py

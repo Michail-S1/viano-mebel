@@ -1,0 +1,133 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="theme-color" content="#244d3e">
+  <title>Виано Мебель · Личный каталог</title>
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+  <svg class="icon-library" aria-hidden="true"><defs>
+    <symbol id="i-grid" viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></symbol>
+    <symbol id="i-list" viewBox="0 0 24 24"><path d="M8 5h13M8 12h13M8 19h13"/><path d="M3 5h.01M3 12h.01M3 19h.01"/></symbol>
+    <symbol id="i-search" viewBox="0 0 24 24"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 5 5"/></symbol>
+    <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+    <symbol id="i-upload" viewBox="0 0 24 24"><path d="M12 16V3m-5 5 5-5 5 5M4 16v4a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-4"/></symbol>
+    <symbol id="i-file" viewBox="0 0 24 24"><path d="M14 2H5a1 1 0 0 0-1 1v18a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1V8Z"/><path d="M14 2v6h6M8 13h8M8 17h8"/></symbol>
+    <symbol id="i-close" viewBox="0 0 24 24"><path d="m6 6 12 12M18 6 6 18"/></symbol>
+    <symbol id="i-chevron" viewBox="0 0 24 24"><path d="m9 5 7 7-7 7"/></symbol>
+    <symbol id="i-down" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></symbol>
+    <symbol id="i-settings" viewBox="0 0 24 24"><path d="M4 7h16M4 17h16"/><circle cx="8" cy="7" r="3" fill="currentColor" stroke="none"/><circle cx="16" cy="17" r="3" fill="currentColor" stroke="none"/></symbol>
+    <symbol id="i-camera" viewBox="0 0 24 24"><path d="M8 5 9.5 3h5L16 5h4a1 1 0 0 1 1 1v14a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1Z"/><circle cx="12" cy="13" r="4"/></symbol>
+    <symbol id="i-check" viewBox="0 0 24 24"><path d="m5 12 4 4L19 6"/></symbol>
+    <symbol id="i-history" viewBox="0 0 24 24"><path d="M3 11a9 9 0 1 1 2.8 7M3 4v7h7M12 7v5l3 2"/></symbol>
+    <symbol id="i-backup" viewBox="0 0 24 24"><path d="M4 7h16v13H4ZM3 3h18v4H3ZM9 11h6"/></symbol>
+    <symbol id="i-edit" viewBox="0 0 24 24"><path d="m16 3 5 5-13 13H3v-5ZM13 6l5 5"/></symbol>
+    <symbol id="i-folder" viewBox="0 0 24 24"><path d="M3 6h7l2 3h9v11H3ZM3 6V4h7l2 2h9v3"/></symbol>
+    <symbol id="i-trash" viewBox="0 0 24 24"><path d="M3 6h18M9 6V3h6v3M5 6l1 15h12l1-15M10 10v7M14 10v7"/></symbol>
+    <symbol id="i-arrow" viewBox="0 0 24 24"><path d="M4 12h16m-6-6 6 6-6 6"/></symbol>
+  </defs></svg>
+  <div class="app-shell">
+    <aside class="sidebar" aria-label="Навигация и фабрики">
+      <a class="brand" href="/" aria-label="Виано Мебель — личный каталог"><span class="brand-mark"><span></span><span></span><span></span><span></span></span><span class="brand-name">Виано<span class="brand-second">Мебель</span></span></a>
+      <div class="workspace-label"><span class="workspace-avatar">М</span><span>Моя база<span>На этом компьютере</span></span><span class="local-dot" title="Локальное приложение"></span></div>
+      <nav class="main-nav">
+        <button class="nav-item active" id="navCatalog"><svg class="icon"><use href="#i-grid"/></svg>Каталог<span id="navTotal" class="nav-count">0</span></button>
+        <button class="nav-item" data-open="import"><svg class="icon"><use href="#i-upload"/></svg>Загрузить прайс</button>
+        <button class="nav-item" data-open="history"><svg class="icon"><use href="#i-history"/></svg>История загрузок</button>
+      </nav>
+      <div class="sidebar-section"><div class="section-label">ФАБРИКИ <span id="factoryCount">0</span></div><div id="factoryList" class="factory-list"><p class="sidebar-muted">Появятся после загрузки прайса</p></div></div>
+      <div class="sidebar-bottom">
+        <button class="nav-item" data-open="backup"><svg class="icon"><use href="#i-backup"/></svg>Резервная копия</button>
+        <button class="nav-item" data-open="settings"><svg class="icon"><use href="#i-settings"/></svg>Настройки</button>
+        <button class="nav-item" data-open="update"><svg class="icon"><use href="#i-history"/></svg>Обновить программу</button>
+        <div class="local-note"><span class="local-dot"></span><span>Работает без интернета<small>База и фото хранятся у вас</small></span></div>
+      </div>
+    </aside>
+    <main class="main-content">
+      <header class="page-header">
+        <div><p class="eyebrow brand-tagline">От идеи до установки</p><h1>Виано Мебель<span class="heading-dot">.</span></h1><p class="page-description">Каталог мебели: коллекции, цены и фотографии</p></div>
+        <button class="button primary header-import" data-open="import"><svg class="icon"><use href="#i-plus"/></svg>Загрузить Excel</button>
+      </header>
+      <section class="overview" aria-label="Сведения о каталоге">
+        <div class="overview-stat"><span class="stat-label">Товаров в каталоге</span><strong id="statTotal">0</strong></div>
+        <div class="overview-stat"><span class="stat-label">Фабрик</span><strong id="statFactories">0</strong></div>
+        <div class="overview-stat"><span class="stat-label">С фотографиями</span><strong id="statPhotos">0<small>из 0</small></strong></div>
+        <button class="price-rule" data-open="settings" title="Настроить расчёт цены"><span class="rule-icon">₽</span><span><span class="stat-label">Ваше правило цены</span><strong id="priceRule">Прайс + 20% + 1 000 ₽</strong></span><svg class="icon"><use href="#i-settings"/></svg></button>
+      </section>
+      <section class="catalog-section" aria-label="Товары">
+        <div class="catalog-heading"><div class="catalog-title-group"><h2 id="catalogTitle">Все товары</h2><span id="resultCount" class="count-pill">0</span></div><span class="last-updated" id="lastUpdated">Добавьте первый прайс</span></div>
+        <div class="mobile-controls"><label><select id="mobileFactory" aria-label="Фабрика"><option value="">Все фабрики</option></select></label><button class="icon-button" data-open="backup" title="Резервная копия" aria-label="Резервная копия"><svg class="icon"><use href="#i-backup"/></svg></button><button class="icon-button" data-open="settings" title="Настройки" aria-label="Настройки"><svg class="icon"><use href="#i-settings"/></svg></button></div><div class="catalog-toolbar">
+          <label class="search-field"><svg class="icon"><use href="#i-search"/></svg><input id="searchInput" type="search" placeholder="Найти товар, коллекцию или артикул" aria-label="Поиск товаров"><kbd>/</kbd></label>
+          <label class="sort-field"><span class="sr-only">Сортировка</span><select id="sortSelect"><option value="name">По названию</option><option value="price_asc">Сначала дешевле</option><option value="price_desc">Сначала дороже</option><option value="newest">Недавно добавленные</option></select></label>
+          <div class="view-toggle" aria-label="Вид каталога"><button id="gridView" class="selected" title="Карточки" aria-label="Показать карточки" aria-pressed="true"><svg class="icon"><use href="#i-grid"/></svg></button><button id="tableView" title="Таблица" aria-label="Показать таблицу" aria-pressed="false"><svg class="icon"><use href="#i-list"/></svg></button></div>
+        </div>
+        <div class="filter-bar">
+          <label class="compact-select"><input id="collectionSelect" list="collectionOptions" placeholder="Все коллекции · поиск" aria-label="Поиск и выбор коллекции"><datalist id="collectionOptions"></datalist></label>
+          <div class="price-filter"><span>Цена, ₽</span><input id="minPrice" inputmode="decimal" type="number" min="0" placeholder="от" aria-label="Цена от"><span>—</span><input id="maxPrice" inputmode="decimal" type="number" min="0" placeholder="до" aria-label="Цена до"></div>
+          <label class="check-label photo-filter"><input id="photoOnly" type="checkbox"><span>Только с фото</span></label>
+          <button id="dimensionToggle" class="button small secondary" aria-expanded="false" aria-controls="dimensionPanel">Размеры</button>
+          <button id="resetFilters" class="text-button reset-filters" hidden>Сбросить фильтры<svg class="icon small"><use href="#i-close"/></svg></button>
+        </div>
+        <form id="dimensionPanel" class="dimension-panel" hidden>
+          <div class="dimension-panel-heading"><h3>Поиск по размерам</h3><span class="muted small-text">Исходная запись товара сохраняется</span></div>
+          <label class="field">Размеры как в прайсе<input name="dimensions" placeholder="Например, 800 × 2200 × 520" inputmode="decimal" maxlength="200"></label>
+          <p class="muted small-text">Можно ввести одно или несколько чисел. Пробелы, ×, х и * равнозначны; 800 не совпадает с 1800. Единицы — как в прайсе.</p>
+          <div class="dimension-ranges">
+            <fieldset><legend>Ширина, мм</legend><input name="width_min" inputmode="decimal" placeholder="от" aria-label="Ширина от, мм"><span>—</span><input name="width_max" inputmode="decimal" placeholder="до" aria-label="Ширина до, мм"></fieldset>
+            <fieldset><legend>Высота, мм</legend><input name="height_min" inputmode="decimal" placeholder="от" aria-label="Высота от, мм"><span>—</span><input name="height_max" inputmode="decimal" placeholder="до" aria-label="Высота до, мм"></fieldset>
+            <fieldset><legend>Глубина, мм</legend><input name="depth_min" inputmode="decimal" placeholder="от" aria-label="Глубина от, мм"><span>—</span><input name="depth_max" inputmode="decimal" placeholder="до" aria-label="Глубина до, мм"></fieldset>
+          </div>
+          <div class="form-grid dimension-format">
+            <label class="field">Порядок в прайсе без подписей<select name="dimension_order"><option value="">Только размеры с подписями Ш, В, Г</option><option value="whd">Ширина × Высота × Глубина</option><option value="wdh">Ширина × Глубина × Высота</option><option value="hwd">Высота × Ширина × Глубина</option><option value="hdw">Высота × Глубина × Ширина</option><option value="dwh">Глубина × Ширина × Высота</option><option value="dhw">Глубина × Высота × Ширина</option></select></label>
+            <label class="field">Единицы в прайсе, если не указаны<select name="dimension_unit"><option value="">Только с указанными единицами</option><option value="mm">Миллиметры</option><option value="cm">Сантиметры</option><option value="m">Метры</option></select></label>
+          </div>
+          <p class="muted small-text">Для диапазонов выбирайте порядок и единицы, принятые в нужном прайсе. Подписанные значения распознаются автоматически. Товары без подходящих размеров не попадут в результат.</p>
+          <div class="dimension-actions"><button type="button" id="clearDimensions" class="text-button">Сбросить размеры</button><button class="button primary small" type="submit">Применить размеры</button></div>
+        </form>
+        <div id="catalogError" class="notice error" hidden role="alert"></div>
+        <div id="catalogBody" aria-live="polite" aria-busy="true"><div class="initial-loading"><span class="spinner"></span>Открываем каталог…</div></div>
+        <footer class="catalog-footer"><span id="showingCount"></span><div id="pagination" class="pagination"></div></footer>
+      </section>
+      <footer class="page-footer"><span>Виано Мебель · Личный каталог</span><span>Фотографии и ваши правки сохраняются при обновлении цен</span></footer>
+    </main>
+  </div>
+  <dialog id="importDialog" class="modal import-modal" aria-labelledby="importTitle">
+    <div class="modal-header"><div><p class="eyebrow">ПОПОЛНЕНИЕ КАТАЛОГА</p><h2 id="importTitle">Загрузка прайса</h2></div><button class="icon-button" data-close aria-label="Закрыть"><svg class="icon"><use href="#i-close"/></svg></button></div>
+    <div class="wizard-steps"><span id="step1" class="wizard-step current"><b>1</b>Файлы</span><span class="step-line"></span><span id="step2" class="wizard-step"><b>2</b>Столбцы</span><span class="step-line"></span><span id="step3" class="wizard-step"><b>3</b>Проверка</span></div>
+    <div id="importError" class="notice error modal-notice" hidden role="alert"></div>
+    <div id="importContent" class="modal-body"></div>
+    <div class="modal-actions"><button id="importBack" class="button secondary" hidden>Назад</button><span id="importActionHint" class="action-hint"></span><button id="importNext" class="button primary">Проверить файлы<svg class="icon"><use href="#i-arrow"/></svg></button></div>
+  </dialog>
+  <dialog id="productDialog" class="product-drawer" aria-labelledby="productTitle"><div id="productContent"></div></dialog>
+  <dialog id="settingsDialog" class="modal settings-modal" aria-labelledby="settingsTitle">
+    <div class="modal-header"><div><p class="eyebrow">ПОД ВАШИ ПРАВИЛА</p><h2 id="settingsTitle">Настройки цен</h2></div><button class="icon-button" data-close aria-label="Закрыть"><svg class="icon"><use href="#i-close"/></svg></button></div>
+    <form id="settingsForm"><div class="modal-body">
+      <p class="body-description">Цена продажи пересчитывается от исходной цены в прайсе для всех товаров.</p>
+      <div class="form-grid"><label class="field">Наценка, %<input name="markup_percent" type="number" step="0.01" min="0" max="1000" required></label><label class="field">Прибавка, ₽<input name="fixed_add" type="number" step="0.01" min="0" required></label><label class="field full">Округление<select name="rounding"><option value="none">Без округления</option><option value="ruble">До рубля</option><option value="ten">До 10 рублей</option><option value="hundred">До 100 рублей</option></select></label></div>
+      <div class="price-example"><span>Например, товар за 10 000 ₽</span><strong id="settingsExample">13 000 ₽</strong><small>Новая цена продажи</small></div>
+      <div id="settingsError" class="notice error" hidden role="alert"></div>
+      <div class="settings-folder"><svg class="icon"><use href="#i-history"/></svg><div><strong>Обновление программы</strong><p>С сохранением вашей базы</p></div><button type="button" class="button small secondary" data-open="update">Открыть</button></div>
+      <div class="settings-folder"><svg class="icon"><use href="#i-folder"/></svg><div><strong>Папка с прайсами</strong><p id="folderSummary">Выберите папку для удобного обновления</p></div><button type="button" class="button small secondary" data-open="folder">Настроить</button></div>
+    </div><div class="modal-actions"><span class="action-hint">Фотографии и карточки сохранятся</span><button type="submit" class="button primary">Сохранить настройки</button></div></form>
+  </dialog>
+  <dialog id="backupDialog" class="modal compact-modal" aria-labelledby="backupTitle">
+    <div class="modal-header"><div><p class="eyebrow">ВАШИ ДАННЫЕ</p><h2 id="backupTitle">Резервная копия</h2></div><button class="icon-button" data-close aria-label="Закрыть"><svg class="icon"><use href="#i-close"/></svg></button></div>
+    <div class="modal-body"><div class="backup-illustration"><svg class="icon"><use href="#i-backup"/></svg></div><h3>Весь каталог в одном архиве</h3><p class="body-description">Товары, исходные цены, фотографии и настройки. Сохраните копию перед переносом на другой компьютер.</p><a href="/api/backup" class="button primary full-button" download><svg class="icon"><use href="#i-backup"/></svg>Скачать резервную копию</a><div class="restore-section"><h3>Восстановить из копии</h3><p class="muted">Текущий каталог будет заменён данными из выбранного архива.</p><label class="button secondary file-button" tabindex="0" role="button" aria-label="Выбрать ZIP-архив"><svg class="icon"><use href="#i-folder"/></svg>Выбрать ZIP-архив<input type="file" id="restoreInput" accept=".zip" hidden></label><div id="restoreDetails" hidden><p id="restoreName"></p><label class="check-label"><input type="checkbox" id="restoreConfirm"><span>Заменить текущий каталог данными из архива</span></label><button class="button primary full-button" id="restoreButton" disabled>Восстановить каталог</button></div><div id="backupError" class="notice error" hidden role="alert"></div></div></div>
+  </dialog>
+  <dialog id="historyDialog" class="modal history-modal" aria-labelledby="historyTitle"><div class="modal-header"><div><p class="eyebrow">ОБНОВЛЕНИЯ КАТАЛОГА</p><h2 id="historyTitle">История загрузок</h2></div><button class="icon-button" data-close aria-label="Закрыть"><svg class="icon"><use href="#i-close"/></svg></button></div><div id="historyContent" class="modal-body"></div></dialog>
+  <dialog id="folderDialog" class="modal compact-modal" aria-labelledby="folderTitle"><div class="modal-header"><div><p class="eyebrow">ПРАЙСЫ НА КОМПЬЮТЕРЕ</p><h2 id="folderTitle">Папка с прайсами</h2></div><button class="icon-button" data-close aria-label="Закрыть"><svg class="icon"><use href="#i-close"/></svg></button></div><form id="folderForm"><div class="modal-body"><p class="body-description">Укажите путь к папке, в которой лежат ваши Excel-файлы.</p><label class="field">Путь к папке<input name="path" placeholder="C:\\Users\\…\\Прайсы" required></label><label class="field folder-mode">Режим импорта<select name="mode"><option value="add">Добавить только новые</option><option value="update">Обновить цены и добавить новые</option></select></label><label class="check-label watch-label"><input name="watch" type="checkbox"><span>Автоматически загружать изменения из папки</span></label><p class="muted small-text">При включении новые и изменённые файлы обрабатываются по сохранённым профилям. Неоднозначные позиции остаются для проверки.</p><div id="folderStatus" class="notice" hidden></div><div id="folderError" class="notice error" hidden role="alert"></div></div><div class="modal-actions"><button type="button" id="folderScan" class="button secondary">Прочитать сейчас</button><button type="submit" class="button primary">Сохранить</button></div></form></dialog>
+  <dialog id="updateDialog" class="modal compact-modal" aria-labelledby="updateTitle">
+    <div class="modal-header"><div><p class="eyebrow">ПРОГРАММА</p><h2 id="updateTitle">Обновление</h2></div><button class="icon-button" data-close aria-label="Закрыть"><svg class="icon"><use href="#i-close"/></svg></button></div>
+    <div class="modal-body"><p class="body-description">Обновляются файлы программы. Ваш каталог, фотографии и прайсы остаются на компьютере.</p>
+      <div class="update-version">Установлена версия <strong id="updateCurrentVersion"></strong></div>
+      <label class="field">Источник обновлений<input id="updateSource" type="text" placeholder="HTTPS-ссылка на latest.json или путь к файлу" autocomplete="off"></label>
+      <p class="muted small-text">Адрес настраивается один раз. После размещения новых версий здесь можно обновляться без передачи всей папки.</p>
+      <div id="updateStatus" class="notice" role="status"></div><p id="updateNotes" class="muted small-text"></p><div id="updateError" class="notice error" role="alert" hidden></div>
+    </div><div class="modal-actions"><button id="checkUpdate" class="button secondary">Проверить</button><button id="installUpdate" class="button primary" disabled>Установить обновление</button></div>
+  </dialog>
+  <div id="toastRegion" class="toast-region" role="status" aria-live="polite"></div>
+  <script src="/static/app.js" defer></script>
+</body>
+</html>

@@ -1,0 +1,29 @@
+name: Check catalog
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Catalog tests
+        run: python -X utf8 -m unittest discover -s tests -v
+      - name: Windows launcher
+        shell: powershell
+        run: powershell.exe -NoProfile -ExecutionPolicy Bypass -File tests/test_launcher.ps1
+      - name: JavaScript syntax
+        run: node --check static/app.js

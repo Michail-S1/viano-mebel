@@ -1,0 +1,11 @@
+data/
+.runtime/
+.qa/
+.analysis/
+exports/
+update-source.json
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+*.log
