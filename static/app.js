@@ -61,10 +61,10 @@ async function loadProducts() {
   finally {if(request===ui.request)$('catalogBody').setAttribute('aria-busy','false');}
 }
 function renderProducts() {
-  const data=ui.products; $('resultCount').textContent=number(data.total);$('resetFilters').hidden=!filterActive();
+  const data=ui.products; renderDimensionHelp(data); const sizeFormatMissing=data.dimension_filter?.unrecognized > (data.dimension_filter?.empty || 0) && !data.dimension_filter.recognized && (!ui.filters.dimension_order || !ui.filters.dimension_unit); $('resultCount').textContent=number(data.total);$('resetFilters').hidden=!filterActive();
   const all=ui.state.stats.total;let html='';
   if(!all) html='<div class="empty-state"><div class="empty-art">' + furniture('шкаф') + '</div><div class="empty-copy"><p class="eyebrow">НАЧНЁМ С ПЕРВОГО ПРАЙСА</p><h3>Здесь будет ваша мебель</h3><p>Загрузите Excel-прайс. Мы соберём товары по фабрикам и коллекциям, а цены рассчитаем по вашему правилу.</p><button class="button primary" data-open="import">' + icon('upload') + 'Загрузить первый Excel</button><div class="empty-hint"><span>' + icon('check') + 'Дубли пропускаются</span><span>' + icon('camera') + 'Фото добавляются сюда</span></div></div></div>';
-  else if(!data.items.length) html='<div class="no-results">' + icon('search') + '<h3>Ничего не нашлось</h3><p>Попробуйте другое название или расширьте фильтры.</p><button class="button secondary" data-action="reset">Сбросить фильтры</button></div>';
+  else if(!data.items.length) html='<div class="no-results">' + icon('search') + '<h3>' + (sizeFormatMissing ? 'Выберите формат размеров' : 'Ничего не нашлось') + '</h3><p>' + (sizeFormatMissing ? 'Откройте «Размеры» и подтвердите порядок и единицы прайса. Значения «от / до» указаны в миллиметрах.' : 'Попробуйте другое название или расширьте фильтры.') + '</p><button class="button secondary" data-action="reset">Сбросить фильтры</button></div>';
   else if(ui.view==='grid') html='<div class="product-grid">' + data.items.map(productCard).join('') + '</div>';
   else html='<div class="table-container"><table class="product-table"><thead><tr><th>Фото</th><th>Товар</th><th>Фабрика</th><th>Размеры</th><th>Цвет</th><th>Цена продажи</th><th></th></tr></thead><tbody>' + data.items.map(p=>'<tr data-product="' + esc(p.id) + '" tabindex="0" role="button" aria-label="Открыть ' + esc(p.name) + '"><td>' + (p.photo_url?'<img class="table-photo" src="' + esc(p.photo_url) + '" alt="" loading="lazy">':'<div class="table-placeholder">' + furniture(p.name) + '</div>') + '</td><td class="table-name">' + esc(p.name) + '<small>' + esc([p.collection,p.sku].filter(Boolean).join(' · ')) + '</small></td><td>' + esc(p.factory) + '</td><td>' + esc(p.dimensions || '—') + '</td><td>' + esc(p.color || '—') + '</td><td><span class="sale-price">' + money(p.sale_price) + '</span><span class="base-price">Прайс: ' + money(p.base_price) + '</span></td><td>' + icon('chevron','small') + '</td></tr>').join('') + '</tbody></table></div>';
   $('catalogBody').innerHTML=html;
@@ -360,8 +360,33 @@ $('mobileFactory').onchange=e=>changeFilter('factory',e.target.value);
 async function bootstrap(){try{await refreshState();await loadProducts();}catch(e){showError('catalogError',e);$('catalogBody').innerHTML='<div class="no-results">' + icon('folder') + '<h3>Не удалось открыть каталог</h3><p>Запустите локальную программу и попробуйте ещё раз.</p><button class="button secondary" data-action="retry">Повторить</button></div>';$('catalogBody').setAttribute('aria-busy','false');}}
 try{setView(localStorage.getItem('catalogView')==='table'?'table':'grid');}catch(e){}
 const dimensionKeys=['dimensions','width_min','width_max','height_min','height_max','depth_min','depth_max','dimension_order','dimension_unit'];
+function renderDimensionHelp(data) {
+  const help=$('dimensionHelp'), summary=data?.dimension_filter;
+  const form=$('dimensionPanel');
+  const hasRange=dimensionKeys.slice(1,7).some(key=>form.elements[key].value.trim());
+  const missingOrder=!form.elements.dimension_order.value, missingUnit=!form.elements.dimension_unit.value;
+  let text='';
+  if(hasRange && (missingOrder || missingUnit)) text='Для размеров без подписей выберите ' + [missingOrder?'порядок Ш / В / Г':'',missingUnit?'единицы прайса':''].filter(Boolean).join(' и ') + '. Можно подтвердить формат Ш × В × Г, миллиметры кнопкой ниже.';
+  if(summary?.unrecognized) {
+    const names={width:'ширину',height:'высоту',depth:'глубину'};
+    const axes=summary.axes.map(axis=>names[axis]).join(', ');
+    text+=(text?' ':'')+'Не проверены товары: '+number(summary.unrecognized)+'. Не удалось определить '+axes+' в миллиметрах.';
+    if(summary.examples.length) text+=' Примеры записи: '+summary.examples.join(' · ')+'.';
+  }
+  help.textContent=text; help.hidden=!text;
+}
+function applyDimensions() {
+  for(const key of dimensionKeys)ui.filters[key]=$('dimensionPanel').elements[key].value.trim();
+  ui.page=1;$('dimensionToggle').textContent=dimensionKeys.slice(0,7).some(k=>ui.filters[k])?'Размеры · фильтр':'Размеры';
+  renderDimensionHelp(null);loadProducts();
+}
+$('dimensionPanel').addEventListener('input',()=>renderDimensionHelp(null));
+$('dimensionPanel').addEventListener('change',()=>renderDimensionHelp(null));
+$('dimensionMillimeters').onclick=()=>{
+  const form=$('dimensionPanel');form.elements.dimension_order.value='whd';form.elements.dimension_unit.value='mm';applyDimensions();
+};
 $('dimensionToggle').onclick=()=>{const panel=$('dimensionPanel');panel.hidden=!panel.hidden;$('dimensionToggle').setAttribute('aria-expanded',String(!panel.hidden));if(!panel.hidden)panel.elements.dimensions.focus();};
-$('dimensionPanel').onsubmit=event=>{event.preventDefault();for(const key of dimensionKeys)ui.filters[key]=$('dimensionPanel').elements[key].value.trim();ui.page=1;$('dimensionToggle').textContent=dimensionKeys.slice(0,7).some(k=>ui.filters[k])?'Размеры · фильтр':'Размеры';loadProducts();};
+$('dimensionPanel').onsubmit=event=>{event.preventDefault();applyDimensions();};
 $('clearDimensions').onclick=()=>{$('dimensionPanel').reset();for(const key of dimensionKeys)ui.filters[key]='';$('dimensionToggle').textContent='Размеры';ui.page=1;loadProducts();};
 let updateTimer=null,updateInstalling=false;
 function renderUpdate(value){

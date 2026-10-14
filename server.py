@@ -39,7 +39,7 @@ try:
 except ImportError:
     Image = ImageOps = None
 
-VERSION = "1.2.1"
+VERSION = "1.2.2"
 TEXT_FIELDS = ("name", "factory", "collection", "sku", "color", "dimensions", "variant")
 SOURCE_FIELDS = TEXT_FIELDS + ("base_price", "source_file", "source_sheet", "source_row")
 DEFAULTS = {"markup_percent": 20, "fixed_add": 1000, "rounding": "ruble"}
@@ -250,6 +250,23 @@ class Catalog:
                 dimension_matcher = make_matcher(params)
             except ValueError as error:
                 raise ApiError(str(error))
+            dimension_filter = None
+            if dimension_matcher and dimension_matcher.axes:
+                dimension_filter = {"axes": list(dimension_matcher.axes), "considered": 0,
+                                    "recognized": 0, "unrecognized": 0, "empty": 0, "examples": []}
+                base_where = " AND ".join(sql)
+                for size, count in db.execute("SELECT dimensions,count(*) FROM products WHERE " + base_where + " GROUP BY dimensions", values):
+                    if not dimension_matcher.text_matches(size):
+                        continue
+                    dimension_filter["considered"] += count
+                    if dimension_matcher.recognizes(size):
+                        dimension_filter["recognized"] += count
+                    else:
+                        dimension_filter["unrecognized"] += count
+                        if not size:
+                            dimension_filter["empty"] += count
+                        elif len(dimension_filter["examples"]) < 3:
+                            dimension_filter["examples"].append(size)
             if dimension_matcher:
                 db.create_function("dimension_matches", 1, dimension_matcher)
                 sql.append("dimension_matches(dimensions)=1")
@@ -268,7 +285,7 @@ class Catalog:
             rows = db.execute("SELECT * FROM products WHERE " + where + " ORDER BY " + sort +
                               " LIMIT ? OFFSET ?", values + [page_size, (page-1)*page_size]).fetchall()
             return {"items": [self.serialize_product(db, r, settings) for r in rows],
-                    "total": total, "page": page, "pages": pages}
+                    "total": total, "page": page, "pages": pages, "dimension_filter": dimension_filter}
 
     def edit_product(self, product_id, fields):
         with self.lock, self.connection() as db:

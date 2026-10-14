@@ -85,8 +85,13 @@ def make_matcher(params):
             ranges[axis] = (low, high)
     if not requested and not ranges:
         return None
+    def text_matches(value):
+        return not (requested and requested - Counter(numbers(value)))
+    def recognizes(value):
+        actual = axes_mm(value, order, source_unit)
+        return all(axis in actual for axis in ranges)
     def matches(value):
-        if requested and requested - Counter(numbers(value)):
+        if not text_matches(value):
             return False
         if ranges:
             actual = axes_mm(value, order, source_unit)
@@ -95,4 +100,7 @@ def make_matcher(params):
                 if number is None or (low is not None and number < low - 1e-7) or (high is not None and number > high + 1e-7):
                     return False
         return True
+    matches.axes = tuple(ranges)
+    matches.recognizes = recognizes
+    matches.text_matches = text_matches
     return matches

@@ -36,6 +36,13 @@ class SizeFilterTests(unittest.TestCase):
         self.assertFalse(match("800х2200х520"))
         self.assertTrue(make_matcher({**params,"dimension_order":"whd","dimension_unit":"mm"})("800х2200х520"))
         self.assertFalse(make_matcher({**params,"dimensions":"900"})("Ш: 80 см; В: 220 см; Г: 52 см"))
+    def test_width_up_to_1901_is_inclusive_and_does_not_search_height(self):
+        match=make_matcher({"width_max":"1901","dimension_order":"whd","dimension_unit":"mm"})
+        self.assertTrue(match("1900×2200×500"))
+        self.assertTrue(match("1901×2200×500"))
+        self.assertFalse(match("1901.1×2200×500"))
+        self.assertFalse(match("2000×1900×500"))
+        self.assertTrue(make_matcher({"dimensions":"1900"})("2000×1900×500"))
     def test_bad_ranges_and_parameters(self):
         for params in ({"width_min":"nan"},{"height_max":"-1"},{"depth_min":"900","depth_max":"800"},
                        {"dimensions":"шкаф"},{"dimension_order":"guess"},{"dimension_unit":"feet"}):

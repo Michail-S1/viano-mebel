@@ -73,17 +73,19 @@
         <form id="dimensionPanel" class="dimension-panel" hidden>
           <div class="dimension-panel-heading"><h3>Поиск по размерам</h3><span class="muted small-text">Исходная запись товара сохраняется</span></div>
           <label class="field">Размеры как в прайсе<input name="dimensions" placeholder="Например, 800 × 2200 × 520" inputmode="decimal" maxlength="200"></label>
-          <p class="muted small-text">Можно ввести одно или несколько чисел. Пробелы, ×, х и * равнозначны; 800 не совпадает с 1800. Единицы — как в прайсе.</p>
+          <p class="muted small-text">Это поиск точных чисел в любой части размеров. Например, 1900 найдёт и ширину, и высоту 1900; границы «от / до» ниже ищут конкретное измерение.</p>
+          <div id="dimensionHelp" class="notice" role="status" hidden></div>
           <div class="dimension-ranges">
             <fieldset><legend>Ширина, мм</legend><input name="width_min" inputmode="decimal" placeholder="от" aria-label="Ширина от, мм"><span>—</span><input name="width_max" inputmode="decimal" placeholder="до" aria-label="Ширина до, мм"></fieldset>
             <fieldset><legend>Высота, мм</legend><input name="height_min" inputmode="decimal" placeholder="от" aria-label="Высота от, мм"><span>—</span><input name="height_max" inputmode="decimal" placeholder="до" aria-label="Высота до, мм"></fieldset>
             <fieldset><legend>Глубина, мм</legend><input name="depth_min" inputmode="decimal" placeholder="от" aria-label="Глубина от, мм"><span>—</span><input name="depth_max" inputmode="decimal" placeholder="до" aria-label="Глубина до, мм"></fieldset>
           </div>
+          <div class="dimension-actions"><button type="button" id="dimensionMillimeters" class="button small secondary">Использовать Ш × В × Г, миллиметры</button></div>
           <div class="form-grid dimension-format">
             <label class="field">Порядок в прайсе без подписей<select name="dimension_order"><option value="">Только размеры с подписями Ш, В, Г</option><option value="whd">Ширина × Высота × Глубина</option><option value="wdh">Ширина × Глубина × Высота</option><option value="hwd">Высота × Ширина × Глубина</option><option value="hdw">Высота × Глубина × Ширина</option><option value="dwh">Глубина × Ширина × Высота</option><option value="dhw">Глубина × Высота × Ширина</option></select></label>
             <label class="field">Единицы в прайсе, если не указаны<select name="dimension_unit"><option value="">Только с указанными единицами</option><option value="mm">Миллиметры</option><option value="cm">Сантиметры</option><option value="m">Метры</option></select></label>
           </div>
-          <p class="muted small-text">Для диапазонов выбирайте порядок и единицы, принятые в нужном прайсе. Подписанные значения распознаются автоматически. Товары без подходящих размеров не попадут в результат.</p>
+          <p class="muted small-text">Для записи 800 × 1900 × 360 без подписей подтвердите порядок и единицы кнопкой выше либо выберите свой формат. В формате Ш × В × Г ширина здесь 800, высота 1900. «До 1901» включает также 1900 и 1901.</p>
           <div class="dimension-actions"><button type="button" id="clearDimensions" class="text-button">Сбросить размеры</button><button class="button primary small" type="submit">Применить размеры</button></div>
         </form>
         <div id="catalogError" class="notice error" hidden role="alert"></div>

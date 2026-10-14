@@ -576,6 +576,32 @@ class CatalogAPI(unittest.TestCase):
         self.assertEqual(filtered(dimensions="900")[0]["id"],target["id"])
         self.expect_http_error("GET","/api/products?width_min=900&width_max=800",statuses=(400,))
 
+    def test_width_range_reports_uninterpreted_sizes_and_inclusive_boundary(self):
+        from urllib.parse import urlencode
+        self.commit([
+            ["A1","Шкаф 1900","Тест","Белый","1900×2200×500",10000],
+            ["A2","Шкаф 1901","Тест","Белый","1901×2200×500",10000],
+            ["A3","Шкаф 1902","Тест","Белый","1902×2200×500",10000],
+            ["A4","Стеллаж","Тест","Белый","800×1900×360",5000],
+            ["A5","Без размеров","Тест","Белый","",5000],
+        ])
+        def result(**params): return self.request("GET","/api/products?"+urlencode(params))
+        missing=result(width_max="1901")
+        self.assertEqual(missing["total"],0)
+        self.assertEqual(missing["dimension_filter"]["recognized"],0)
+        self.assertEqual(missing["dimension_filter"]["unrecognized"],5)
+        self.assertEqual(missing["dimension_filter"]["empty"],1)
+        configured=result(width_max="1901",dimension_order="whd",dimension_unit="mm")
+        self.assertEqual({p["sku"] for p in configured["items"]},{"A1","A2","A4"})
+        self.assertEqual(configured["dimension_filter"]["recognized"],4)
+        self.assertEqual(configured["dimension_filter"]["unrecognized"],1)
+        exact=result(dimensions="1900")
+        self.assertEqual({p["sku"] for p in exact["items"]},{"A1","A4"})
+        self.assertIsNone(exact["dimension_filter"])
+        combined=result(dimensions="1900",width_max="1901")
+        self.assertEqual(combined["dimension_filter"]["unrecognized"],2)
+        empty=result(width_max="1901",factory="Нет такой фабрики")
+        self.assertEqual(empty["dimension_filter"]["considered"],0)
     def test_updates_cannot_modify_application_from_an_isolated_database(self):
         self.assertEqual(self.request("GET","/api/update")["version"],self.request("GET","/api/state")["version"])
         self.expect_http_error("POST","/api/update/check",{"source":"https://example.com/latest.json"},statuses=(403,))
