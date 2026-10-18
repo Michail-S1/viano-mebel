@@ -16,6 +16,8 @@ from backend.avito_import import COLUMNS, parse_export
 NS = '{http://schemas.openxmlformats.org/spreadsheetml/2006/main}'
 REL = '{http://schemas.openxmlformats.org/officeDocument/2006/relationships}id'
 CELL = re.compile(rb'<(?:[\w.-]+:)?c(?=[\s>])[^>]*(?:/>|>.*?</(?:[\w.-]+:)?c\s*>)', re.S)
+ROW = re.compile(rb'<(?:[\w.-]+:)?row(?=[\s>])[^>]*(?:/>|>.*?</(?:[\w.-]+:)?row\s*>)', re.S)
+PILOT_MODE = 'selected_first_manual_pilot_v1'
 
 
 def xml(data):
@@ -29,6 +31,29 @@ def parsed_bytes(data, money_cents):
         path = Path(directory)/'source.xlsx'
         path.write_bytes(data)
         return parse_export(path, money_cents)
+
+
+def workbook_index(members):
+    rels = {r.get('Id'): r for r in xml(members['xl/_rels/workbook.xml.rels'])}
+    sheets = {}
+    for sheet in xml(members['xl/workbook.xml']).findall(NS+'sheets/'+NS+'sheet'):
+        rel = rels[sheet.get(REL)]
+        target = rel.get('Target', '')
+        path = posixpath.normpath(target.lstrip('/') if target.startswith('/') else 'xl/'+target)
+        if rel.get('TargetMode') == 'External' or not path.startswith('xl/') or path not in members:
+            raise ValueError('Неподдерживаемая ссылка на лист')
+        sheets[sheet.get('name')] = path
+    strings = []
+    if 'xl/sharedStrings.xml' in members:
+        strings = [''.join(t.text or '' for t in item.iter(NS+'t')) for item in xml(members['xl/sharedStrings.xml'])]
+    return sheets, strings
+
+
+def cell_text(cell, strings):
+    if cell.get('t') == 'inlineStr':
+        return ''.join(t.text or '' for t in cell.iter(NS+'t'))
+    value = cell.findtext(NS+'v') or ''
+    return strings[int(value)] if cell.get('t') == 's' else value
 
 
 def patch_workbook(data, requests, money_cents, required_ids=(), strict_coverage=True):
@@ -56,24 +81,10 @@ def patch_workbook(data, requests, money_cents, required_ids=(), strict_coverage
         keys = [r['source_details']['export_id'] for r in records.values()]
         if not keys or any(not k or k.lower() == 'stop' for k in keys) or len(set(keys)) != len(keys):
             raise ValueError('В файле должны быть непустые уникальные Id; команда stop запрещена')
-        rels = {r.get('Id'): r for r in xml(members['xl/_rels/workbook.xml.rels'])}
-        sheets = {}
-        for sheet in xml(members['xl/workbook.xml']).findall(NS+'sheets/'+NS+'sheet'):
-            rel = rels[sheet.get(REL)]
-            target = rel.get('Target', '')
-            path = posixpath.normpath(target.lstrip('/') if target.startswith('/') else 'xl/'+target)
-            if rel.get('TargetMode') == 'External' or not path.startswith('xl/') or path not in members:
-                raise ValueError('Неподдерживаемая ссылка на лист')
-            sheets[sheet.get('name')] = path
-        strings = []
-        if 'xl/sharedStrings.xml' in members:
-            strings = [''.join(t.text or '' for t in item.iter(NS+'t')) for item in xml(members['xl/sharedStrings.xml'])]
+        sheets, strings = workbook_index(members)
 
         def text(cell):
-            if cell.get('t') == 'inlineStr':
-                return ''.join(t.text or '' for t in cell.iter(NS+'t'))
-            value = cell.findtext(NS+'v') or ''
-            return strings[int(value)] if cell.get('t') == 's' else value
+            return cell_text(cell, strings)
 
         changes, patches = [], {}
         for avito_id, request in requests.items():
@@ -156,3 +167,86 @@ def patch_workbook(data, requests, money_cents, required_ids=(), strict_coverage
     return result_bytes, {'changes': changes, 'total_listings': len(records), 'unchanged_listings': len(records)-len(changes),
                           'preserved_members': len(members)-len(patches), 'changed_sheets': len(patches),
                           'missing_registry_ids': sorted(missing)}
+
+
+def build_pilot_workbook(data, requests, money_cents):
+    """First manual pilot only: include changed selected rows, never the full feed.
+
+    Support confirmed this first-upload scenario for the user's account. This
+    is not a permanent feed or permission to remove previously managed ads.
+    """
+    if any(not isinstance(r.get('target_cents'), int) or r['target_cents'] % 100 for r in requests.values()):
+        raise ValueError('Шаблон Авито требует целые рубли. Исправьте настройки цены в каталоге; экспорт сам не округляет')
+    patched, report = patch_workbook(data, requests, money_cents, strict_coverage=False)
+    source = parsed_bytes(data, money_cents)
+    by_id = {r['avito_id']: r for r in source['records']}
+    included = {c['avito_id'] for c in report['changes']}
+    with zipfile.ZipFile(io.BytesIO(patched)) as archive:
+        infos = archive.infolist()
+        members = {i.filename: archive.read(i) for i in infos}
+        sheets, strings = workbook_index(members)
+        keep = {}
+        for identifier in included:
+            location = by_id[identifier]['source_details']
+            keep.setdefault(sheets[location['sheet']], set()).add(location['row'])
+        modified = dict(members)
+        checked_paths = set()
+        for name, path in sheets.items():
+            root = xml(members[path])
+            rows = root.findall(NS+'sheetData/'+NS+'row')
+            # Dictionary and instruction sheets have no advertisement headers.
+            header = next((r for r in rows[:10] if
+                any(cell_text(c, strings).strip() in COLUMNS['avito_id'] for c in r.findall(NS+'c')) and
+                any(cell_text(c, strings).strip() in COLUMNS['title'] for c in r.findall(NS+'c'))), None)
+            if header is None:
+                continue
+            if header.get('r') != '2':
+                raise ValueError('Для частичного пилота поддержан шаблон с заголовком во второй строке')
+            checked_paths.add(path)
+            allowed = keep.get(path, set())
+            found = set()
+
+            def select_row(match):
+                raw = match.group()
+                ref = re.search(rb'\br=["\']([0-9]+)["\']', raw.split(b'>', 1)[0])
+                if not ref:
+                    raise ValueError('Неоднозначный номер строки XLSX')
+                number = int(ref.group(1))
+                if number <= 4:
+                    return raw
+                if number in allowed:
+                    if number in found:
+                        raise ValueError('Повторная строка выбранного объявления')
+                    found.add(number)
+                    return raw
+                return b''
+
+            modified[path] = ROW.sub(select_row, members[path])
+            if found != allowed:
+                raise ValueError('Не найдены строки выбранных объявлений')
+            # There must be no unselected row in any advertisement sheet,
+            # including hidden category sheets that the normal importer skips.
+            remaining = {int(r.get('r')) for r in xml(modified[path]).findall(NS+'sheetData/'+NS+'row') if int(r.get('r')) > 4}
+            if remaining != allowed:
+                raise ValueError('В пилотном файле остались посторонние строки')
+        if not keep.keys() <= checked_paths:
+            raise ValueError('Не все выбранные листы имеют проверенный формат')
+        output = io.BytesIO()
+        with zipfile.ZipFile(output, 'w') as result:
+            result.comment = archive.comment
+            for info in infos:
+                result.writestr(info, modified[info.filename])
+    result_bytes = output.getvalue()
+    after = parsed_bytes(result_bytes, money_cents)
+    expected = {key: {**by_id[key], 'price': requests[key]['target_cents']/100} for key in included}
+    actual = {r['avito_id']: r for r in after['records']}
+    if after['issues'] or after['duplicates'] or actual != expected:
+        raise ValueError('Не пройдена проверка точного состава пилотного файла')
+    with zipfile.ZipFile(io.BytesIO(data)) as original:
+        changed_parts = [name for name in modified if original.read(name) != modified[name]]
+    report.update({'mode': PILOT_MODE, 'source_total_listings': len(by_id),
+        'output_total_listings': len(actual), 'output_avito_ids': sorted(actual),
+        'preserved_members': len(modified)-len(changed_parts), 'changed_sheets': len(changed_parts),
+        'excluded_from_pilot_count': len(by_id)-len(actual),
+        'skipped_unchanged_ids': sorted(requests.keys()-included)})
+    return result_bytes, report

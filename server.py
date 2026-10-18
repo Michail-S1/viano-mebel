@@ -40,7 +40,7 @@ try:
 except ImportError:
     Image = ImageOps = None
 
-VERSION = "1.3.2"
+VERSION = "1.3.3"
 TEXT_FIELDS = ("name", "factory", "collection", "sku", "color", "dimensions", "variant")
 SOURCE_FIELDS = TEXT_FIELDS + ("base_price", "source_file", "source_sheet", "source_row")
 DEFAULTS = {"markup_percent": 20, "fixed_add": 1000, "rounding": "ruble"}

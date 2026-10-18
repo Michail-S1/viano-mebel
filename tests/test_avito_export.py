@@ -2,11 +2,13 @@
 import base64
 import io
 import json
+import hashlib
+import re
 import unittest
 import zipfile
 
 from backend.avito import money_cents
-from backend.avito_export import patch_workbook
+from backend.avito_export import patch_workbook, build_pilot_workbook, parsed_bytes, PILOT_MODE, NS, ROW
 from server import ApiError
 import test_avito as avito_fixtures
 
@@ -27,7 +29,7 @@ class PriceExport(unittest.TestCase):
             self.listing = self.avito._listing(db, db.execute('SELECT id FROM avito_listings').fetchone()[0])
         self.fixture.confirm(self.listing, self.fixture.region)
         self.plan = self.avito.prepare({'factory': 'Регион 058'})
-        self.payload = {'plan_id': self.plan['id'], 'listing_ids': [self.listing['id']]}
+        self.payload = {'plan_id': self.plan['id'], 'listing_ids': [self.listing['id']], 'mode': PILOT_MODE}
 
     def tearDown(self):
         self.fixture.tearDown()
@@ -36,7 +38,7 @@ class PriceExport(unittest.TestCase):
         return self.avito.preview_price_export(self.source, 'fresh.xlsx', {**self.payload, **changes})
 
     def download(self, preview):
-        return self.avito.download_price_export({'session_id': preview['session_id'], 'reviewed_prices': True, 'reviewed_full_file': True})
+        return self.avito.download_price_export({'session_id': preview['session_id'], 'reviewed_prices': True, 'first_manual_pilot': True})
 
     def replace_member(self, source, transform):
         out = io.BytesIO()
@@ -52,7 +54,11 @@ class PriceExport(unittest.TestCase):
         self.assertEqual(preview['unchanged_listings'], 1)
         self.assertEqual(preview['changes'][0]['target_cents'], money_cents(self.fixture.region['sale_price']))
         output = (self.avito.price_export_sessions[preview['session_id']]['directory']/'prices.xlsx').read_bytes()
-        self.assertFalse(preview['upload_allowed'])
+        self.assertTrue(preview['upload_allowed'])
+        self.assertFalse(preview['automatic_upload_allowed'])
+        self.assertEqual(preview['output_total_listings'], 1)
+        self.assertEqual(preview['output_avito_ids'], ['123456789'])
+        self.assertEqual(len(parsed_bytes(output, money_cents)['records']), 1)
         self.assertEqual(preview['selected_found_count'], 1)
         self.assertEqual(preview['selected_items'][0]['avito_id'], self.listing['avito_id'])
         with zipfile.ZipFile(io.BytesIO(self.source)) as a, zipfile.ZipFile(io.BytesIO(output)) as b:
@@ -64,7 +70,7 @@ class PriceExport(unittest.TestCase):
             self.assertEqual(db.execute('SELECT price_cents FROM avito_listings').fetchone()[0], 1500000)
             kinds = [r[0] for r in db.execute('SELECT kind FROM avito_events')]
         self.assertIn('price_file_prepared', kinds)
-        self.assertNotIn('price_file_downloaded', kinds)
+        self.assertNotIn('pilot_file_downloaded', kinds)
 
     def test_explicit_checks_required_and_file_is_not_sent(self):
         preview = self.preview()
@@ -150,19 +156,19 @@ class PriceExport(unittest.TestCase):
         with self.assertRaises(ApiError):
             self.download(preview)
 
-    def test_missing_historical_listing_requires_separate_check(self):
+    def test_missing_historical_listing_is_not_a_missing_selected_item(self):
         self.fixture.listing(avito_id='5555555', title='Старое объявление')
         self.plan = self.avito.prepare({'factory': 'Регион 058'})
         self.payload['plan_id'] = self.plan['id']
         preview = self.preview()
         self.assertEqual(preview['missing_registry_ids'], ['5555555'])
-        with self.assertRaises(ApiError):
-            self.download(preview)
         self.assertEqual(preview['selected_found_count'], 1)
         self.assertNotIn(self.listing['avito_id'], preview['missing_registry_ids'])
+        # The unrelated historical record does not enter this selected pilot.
+        self.assertEqual(self.download(preview)['report']['output_avito_ids'], ['123456789'])
+        self.avito.price_export_sessions[preview['session_id']]['report']['mode'] = 'old_full_file'
         with self.assertRaises(ApiError) as denied:
-            self.avito.download_price_export({'session_id': preview['session_id'], 'reviewed_prices': True,
-                'reviewed_full_file': True, 'reviewed_missing': True, 'upload_allowed': True})
+            self.download(preview)
         self.assertEqual(denied.exception.status, 403)
 
     def test_only_the_imported_source_workbook_can_be_used(self):
@@ -182,6 +188,57 @@ class PriceExport(unittest.TestCase):
         with zipfile.ZipFile(io.BytesIO(result)) as z:
             self.assertIn(b'<x:v>16000</x:v>', z.read('xl/worksheets/sheet1.xml'))
 
+    def test_partial_pilot_preserves_headers_and_selected_row_except_price(self):
+        request = {'123456789': {'target_cents': 1600000, 'export_id': 'external-key'}}
+        result, report = build_pilot_workbook(self.source, request, money_cents)
+        self.assertEqual(report['output_avito_ids'], ['123456789'])
+        self.assertEqual(report['excluded_from_pilot_count'], 1)
+        with zipfile.ZipFile(io.BytesIO(self.source)) as a, zipfile.ZipFile(io.BytesIO(result)) as b:
+            before = ROW.findall(a.read('xl/worksheets/sheet1.xml'))
+            after = ROW.findall(b.read('xl/worksheets/sheet1.xml'))
+            self.assertEqual(before[:4], after[:4])
+            self.assertEqual(len(after), 5)
+            self.assertEqual(before[4].replace(b'<v>15000</v>', b'<v>16000</v>'), after[4])
+            for name in a.namelist():
+                if name != 'xl/worksheets/sheet1.xml':
+                    self.assertEqual(a.read(name), b.read(name))
+
+    def test_pilot_skips_unchanged_and_rejects_fractional_rubles(self):
+        result, report = build_pilot_workbook(self.source, {
+            '123456789': {'target_cents': 1600000, 'export_id': 'external-key'},
+            '987654321': {'target_cents': 1000000, 'export_id': 'external-job'}}, money_cents)
+        self.assertEqual(report['skipped_unchanged_ids'], ['987654321'])
+        self.assertEqual([r['avito_id'] for r in parsed_bytes(result, money_cents)['records']], ['123456789'])
+        with self.assertRaisesRegex(ValueError, 'целые рубли'):
+            build_pilot_workbook(self.source, {'123456789': {'target_cents': 1600001, 'export_id': 'external-key'}}, money_cents)
+
+    def test_full_file_cannot_be_replayed_as_selected_pilot(self):
+        preview = self.preview()
+        session = self.avito.price_export_sessions[preview['session_id']]
+        (session['directory']/'prices.xlsx').write_bytes(self.source)
+        session['report']['output_sha256'] = hashlib.sha256(self.source).hexdigest()
+        with self.assertRaisesRegex(ApiError, 'Состав файла'):
+            self.download(preview)
+        with self.assertRaises(ApiError):
+            self.preview(mode='full')
+
+    def test_unselected_hidden_advertisement_sheet_is_cleared(self):
+        out = io.BytesIO()
+        with zipfile.ZipFile(io.BytesIO(self.source)) as a, zipfile.ZipFile(out, 'w') as b:
+            hidden_sheet = a.read('xl/worksheets/sheet1.xml')
+            for info in a.infolist():
+                data = a.read(info.filename)
+                if info.filename == 'xl/workbook.xml':
+                    data = data.replace(b'</sheets>', b'<sheet name="Hidden ads" sheetId="2" state="hidden" r:id="rId2"/></sheets>')
+                if info.filename == 'xl/_rels/workbook.xml.rels':
+                    data = data.replace(b'</Relationships>', b'<Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet2.xml"/></Relationships>')
+                b.writestr(info, data)
+            b.writestr('xl/worksheets/sheet2.xml', hidden_sheet)
+        result, report = build_pilot_workbook(out.getvalue(), {'123456789': {'target_cents': 1600000, 'export_id': 'external-key'}}, money_cents)
+        with zipfile.ZipFile(io.BytesIO(result)) as z:
+            self.assertEqual(len(ROW.findall(z.read('xl/worksheets/sheet2.xml'))), 4)
+            self.assertEqual(len(ROW.findall(z.read('xl/worksheets/sheet1.xml'))), 5)
+
     def test_http_export_download_and_send_remains_blocked(self):
         import test_server as fixtures
         client = fixtures.CatalogAPI('runTest')
@@ -199,11 +256,14 @@ class PriceExport(unittest.TestCase):
                 'listing_version': listing['version'], 'link_version': detail['link_version'], 'product_id': product['id'],
                 'product_snapshot': product_snapshot(product), 'reason': 'Проверка экспорта'})
             plan = client.request('POST', '/api/avito/prepare', {'factory': 'Регион 058'})
-            payload = {'name': 'fresh.xlsx', 'content': base64.b64encode(self.source).decode(), 'plan_id': plan['id'], 'listing_ids': [listing['id']]}
+            payload = {'name': 'fresh.xlsx', 'content': base64.b64encode(self.source).decode(), 'plan_id': plan['id'], 'listing_ids': [listing['id']], 'mode': PILOT_MODE}
             preview = client.request('POST', '/api/avito/export/preview', payload)
-            self.assertFalse(preview['upload_allowed'])
+            self.assertTrue(preview['upload_allowed'])
             self.assertEqual(preview['selected_found_count'], 1)
-            client.expect_http_error('POST', '/api/avito/export/download', {'session_id': preview['session_id'], 'reviewed_prices': True, 'reviewed_full_file': True, 'reviewed_missing': True}, statuses=(403,)).close()
+            downloaded = client.request('POST', '/api/avito/export/download', {'session_id': preview['session_id'], 'reviewed_prices': True, 'first_manual_pilot': True})
+            rows = parsed_bytes(base64.b64decode(downloaded['content']), money_cents)['records']
+            self.assertEqual([r['avito_id'] for r in rows], ['123456789'])
+            self.assertFalse(client.request('GET', '/api/avito/state')['transport_enabled'])
             client.expect_http_error('POST', '/api/avito/export/preview', payload, headers={'Origin': 'https://foreign.example'}, statuses=(403,)).close()
             client.expect_http_error('POST', '/api/avito/send', {}, statuses=(403,)).close()
         finally:
