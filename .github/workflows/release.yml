@@ -35,7 +35,9 @@ jobs:
         shell: powershell
         run: powershell.exe -NoProfile -ExecutionPolicy Bypass -File tests/test_launcher.ps1
       - name: JavaScript syntax
-        run: node --check static/app.js
+        run: |
+          node --check static/app.js
+          node --check static/avito.js
       - name: Build and publish code-only update
         env:
           GH_TOKEN: ${{ github.token }}

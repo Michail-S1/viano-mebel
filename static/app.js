@@ -14,7 +14,7 @@ async function api(path, data, method) {
   catch (e) { throw new Error('Не удалось связаться с каталогом. Убедитесь, что локальная программа запущена.'); }
   let result;
   try { result = await response.json(); } catch (e) { throw new Error('Программа вернула неожиданный ответ. Попробуйте ещё раз.'); }
-  if (!response.ok) throw new Error(result.error || 'Не удалось выполнить операцию.');
+  if (!response.ok) { const error=new Error(result.error || 'Не удалось выполнить операцию.'); error.status=response.status; throw error; }
   return result;
 }
 function showError(id, error) { const target=$(id); if(!target){if(error)toast(error.message || String(error),true);return;} target.textContent=error ? (error.message || String(error)) : ''; target.hidden=!error; }
@@ -348,7 +348,7 @@ $('searchInput').addEventListener('input',e=>{clearTimeout(searchTimer);searchTi
 $('sortSelect').onchange=e=>changeFilter('sort',e.target.value);
 $('collectionSelect').onchange=e=>changeFilter('collection',e.target.value);
 $('photoOnly').onchange=e=>changeFilter('has_photo',e.target.checked?'true':'');
-$('resetFilters').onclick=resetFilters;$('navCatalog').onclick=resetFilters;
+$('resetFilters').onclick=resetFilters;$('navCatalog').onclick=()=>{window.AvitoUI?.close();resetFilters();};
 function setView(view){ui.view=view;try{localStorage.setItem('catalogView',view);}catch(e){}$('gridView').classList.toggle('selected',view==='grid');$('gridView').setAttribute('aria-pressed',view==='grid');$('tableView').classList.toggle('selected',view==='table');$('tableView').setAttribute('aria-pressed',view==='table');if(ui.products)renderProducts();}
 $('gridView').onclick=()=>setView('grid');$('tableView').onclick=()=>setView('table');
 $('importNext').onclick=nextImport;$('importBack').onclick=importBack;

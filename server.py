@@ -33,13 +33,14 @@ from backend.importer import inspect_file, parse_file, product_key, normalize_te
 from backend.colors import derive_color
 from backend.images import product_pictures
 from backend.dimensions import make_matcher
+from backend.avito import Avito
 from launcher import update as updater
 try:
     from PIL import Image, ImageOps
 except ImportError:
     Image = ImageOps = None
 
-VERSION = "1.2.2"
+VERSION = "1.3.0"
 TEXT_FIELDS = ("name", "factory", "collection", "sku", "color", "dimensions", "variant")
 SOURCE_FIELDS = TEXT_FIELDS + ("base_price", "source_file", "source_sheet", "source_row")
 DEFAULTS = {"markup_percent": 20, "fixed_add": 1000, "rounding": "ruble"}
@@ -146,6 +147,7 @@ class Catalog:
             if folder.get("pending_session"):
                 folder.update({"pending_session": None, "status": "watching" if folder.get("watch") else "idle"})
                 self.set_meta(db, "folder", folder)
+        self.avito = Avito(self, ApiError, now)
         self.watcher = threading.Thread(target=self.watch_loop, name="Folder watcher", daemon=True)
         self.watcher.start()
 
@@ -169,6 +171,8 @@ class Catalog:
 
     def bump(self, db):
         self.set_meta(db, "revision", int(self.meta(db, "revision") or 0) + 1)
+        if hasattr(self, "avito"):
+            self.avito.invalidate(db, "Каталог или настройки изменились; подготовьте план заново")
 
     def serialize_product(self, db, row, settings=None):
         result = dict(row)
@@ -906,6 +910,7 @@ class Catalog:
                 Path(str(self.db_path)+suffix).unlink(missing_ok=True)
             os.replace(staged, self.db_path)
             self.sessions.clear()
+            self.avito.import_sessions.clear()
             with self.connection() as db:
                 folder = self.meta(db, "folder") or {}
                 folder.update({"watch": False, "status": "idle", "pending_session": None, "error": None})
@@ -1094,11 +1099,54 @@ class Handler(BaseHTTPRequestHandler):
             self.server.update_lock.release()
             raise
 
+    def handle_avito(self, path, params):
+        service = self.catalog.avito
+        if self.command in ("GET", "HEAD"):
+            if path == "/api/avito/state":
+                return service.state()
+            if path == "/api/avito/listings":
+                return service.listings(params)
+            if path == "/api/avito/journal":
+                return service.journal()
+            if re.fullmatch(r"/api/avito/listings/[a-f0-9]{32}", path):
+                return service.detail(path.rsplit("/", 1)[-1], params)
+            if re.fullmatch(r"/api/avito/plans/[a-f0-9]{32}", path):
+                return service.plan(path.rsplit("/", 1)[-1])
+        if self.command == "POST":
+            if path == "/api/avito/send":
+                raise ApiError("Отправка запрещена: официальный транспорт не реализован.", 403)
+            payload = self.body()
+            if not isinstance(payload, dict):
+                raise ApiError("Ожидается объект JSON.")
+            if path == "/api/avito/setup":
+                return service.setup()
+            if path == "/api/avito/listings":
+                return service.save_listing(payload)
+            if path == "/api/avito/import/inspect":
+                return service.inspect_export(decode_file(payload, 30*1024*1024), clean_name(payload.get("name", "")),
+                                              payload.get("mode", "add"), payload.get("observed_at"))
+            if path == "/api/avito/import/commit":
+                return service.commit_export(payload)
+            if path == "/api/avito/demo":
+                source = json.loads((ROOT / "static" / "avito-demo.json").read_text(encoding="utf-8"))
+                items = [service.save_listing(item, demo=True) for item in source["records"]]
+                return {"items": items, "is_demo": True}
+            if path == "/api/avito/decisions":
+                return service.decide(payload)
+            if path == "/api/avito/prepare":
+                return service.prepare(payload)
+            if re.fullmatch(r"/api/avito/plans/[a-f0-9]{32}/cancel", path):
+                return service.cancel(path.split("/")[4])
+        raise ApiError("Операция Авито не найдена.", 404)
+
     def handle_request(self):
         try:
             self.valid_local()
             parsed = urlparse(self.path)
             path = unquote(parsed.path)
+            if path.startswith("/api/avito/"):
+                params = {k: v[0] for k, v in parse_qs(parsed.query).items()}
+                return self.send_json(self.handle_avito(path, params))
             if self.command in ("GET", "HEAD"):
                 if path == "/api/update":
                     return self.send_json(self.update_state())

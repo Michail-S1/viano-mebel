@@ -36,6 +36,7 @@
         <button class="nav-item active" id="navCatalog"><svg class="icon"><use href="#i-grid"/></svg>Каталог<span id="navTotal" class="nav-count">0</span></button>
         <button class="nav-item" data-open="import"><svg class="icon"><use href="#i-upload"/></svg>Загрузить прайс</button>
         <button class="nav-item" data-open="history"><svg class="icon"><use href="#i-history"/></svg>История загрузок</button>
+        <button class="nav-item" id="navAvito"><svg class="icon"><use href="#i-list"/></svg>Авито</button>
       </nav>
       <div class="sidebar-section"><div class="section-label">ФАБРИКИ <span id="factoryCount">0</span></div><div id="factoryList" class="factory-list"><p class="sidebar-muted">Появятся после загрузки прайса</p></div></div>
       <div class="sidebar-bottom">
@@ -92,6 +93,7 @@
         <div id="catalogBody" aria-live="polite" aria-busy="true"><div class="initial-loading"><span class="spinner"></span>Открываем каталог…</div></div>
         <footer class="catalog-footer"><span id="showingCount"></span><div id="pagination" class="pagination"></div></footer>
       </section>
+      <section id="avitoSection" class="avito-section" hidden aria-labelledby="avitoHeading"></section>
       <footer class="page-footer"><span>Виано Мебель · Личный каталог</span><span>Фотографии и ваши правки сохраняются при обновлении цен</span></footer>
     </main>
   </div>
@@ -131,5 +133,6 @@
   </dialog>
   <div id="toastRegion" class="toast-region" role="status" aria-live="polite"></div>
   <script src="/static/app.js" defer></script>
+  <script src="/static/avito.js" defer></script>
 </body>
 </html>
