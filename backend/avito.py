@@ -1,10 +1,12 @@
 """Local matching and dry-run plans only. This module has no network transport."""
 import hashlib
+import base64
 import json
 import re
 import uuid
 import time
 import zipfile
+from xml.etree.ElementTree import ParseError
 from contextlib import nullcontext
 from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
@@ -12,6 +14,7 @@ from urllib.parse import urlparse
 
 from backend import avito_migrations as migrations
 from backend.avito_import import parse_export
+from backend.avito_export import patch_workbook
 from backend.avito_matching import LABELS, compatibility, evaluate, factory_mentions, match_context, norm, plain, search_matches
 from backend.avito_workflow import ReviewIndex, exclusion
 
@@ -52,6 +55,7 @@ class Avito:
     def __init__(self, catalog, error, now):
         self.catalog, self.error, self.now = catalog, error, now
         self.import_sessions = {}
+        self.price_export_sessions = {}
         self.review_cache = {}
         self.review_revision = None
 
@@ -537,6 +541,98 @@ class Avito:
             db.execute("UPDATE avito_plans SET state='cancelled' WHERE id=?", (identifier,))
             self.event(db, "plan_cancelled", {"plan_id": identifier})
             return {"ok": True}
+
+    def _export_items(self, db, plan_id, identifiers):
+        plan = self._plan(db, plan_id)
+        if (plan['state'] != 'prepared' or plan['revision'] != self.catalog.meta(db, 'revision')
+                or json.loads(plan['settings']) != self.catalog.meta(db, 'settings')):
+            raise self.error('Сравнение устарело. Нажмите «Сравнить цены» заново.', 409)
+        if (not isinstance(identifiers, list) or not 1 <= len(identifiers) <= 10
+                or any(not isinstance(i, str) for i in identifiers) or len(set(identifiers)) != len(identifiers)):
+            raise self.error('Для пилота выберите от 1 до 10 разных объявлений одной фабрики.')
+        items = {i['listing_id']: i for i in plan['items']}
+        result = []
+        for identifier in identifiers:
+            item = items.get(identifier)
+            if not item:
+                raise self.error('Объявление не входит в сравнение выбранной фабрики.', 409)
+            listing = self._checked_listing(db, identifier)
+            link = db.execute('SELECT * FROM avito_links WHERE listing_id=?', (identifier,)).fetchone()
+            if not link or listing['is_demo'] or self._exclusion(db, listing):
+                raise self.error('Нет подтверждённой связи, запись исключена или является DEMO.', 409)
+            product = self._product(db, link['product_id'])
+            if (link['version'] != item['link_version'] or listing['version'] != item['listing_version']
+                    or link['product_id'] != item['product_id'] or product['factory'] != plan['factory']
+                    or product_snapshot(product) != item['product_snapshot']
+                    or listing_snapshot(listing) != json.loads(link['listing_snapshot'])
+                    or compatibility(listing, product, json.loads(link['product_snapshot']))['conflicts']
+                    or money_cents(product['sale_price']) != item['target_cents'] or item['target_cents'] is None):
+                raise self.error('Связь или цена изменилась. Проверьте соответствие и создайте новое сравнение.', 409)
+            result.append((item, listing))
+        return plan, result
+
+    def preview_price_export(self, data, filename, payload):
+        if not filename.lower().endswith('.xlsx') or len(data) > 30*1024*1024:
+            raise self.error('Выберите полную свежую выгрузку XLSX размером до 30 МБ.')
+        with self.catalog.lock, self.catalog.connection() as db:
+            self.ready(db)
+            identifiers = payload.get('listing_ids')
+            plan, items = self._export_items(db, payload.get('plan_id'), identifiers)
+            identifier = uuid.uuid4().hex
+            directory = self.catalog.incoming/'avito-price-export'/identifier
+            directory.mkdir(parents=True)
+            (directory/'source.xlsx').write_bytes(data)
+            try:
+                parsed = parse_export(directory/'source.xlsx', money_cents)
+                by_id = {r['avito_id']: r for r in parsed['records']}
+                requests = {}
+                source_hash = hashlib.sha256(data).hexdigest()
+                for item, listing in items:
+                    fresh = by_id.get(listing['avito_id'])
+                    export_id = listing['source_details'].get('export_id')
+                    if not export_id or not fresh or listing_snapshot(fresh) != listing_snapshot(listing):
+                        raise ValueError('Содержание объявления отличается или нет исходного Id: '+listing['avito_id']+'. Импортируйте свежую выгрузку и проверьте связь')
+                    if listing['source_details'].get('sha256') != source_hash:
+                        raise ValueError('Это не та выгрузка, из которой обновлены выбранные объявления. Импортируйте этот файл в режиме обновления, затем сравните цены заново')
+                    requests[listing['avito_id']] = {'export_id': export_id, 'target_cents': item['target_cents']}
+                required = [r[0] for r in db.execute('SELECT avito_id FROM avito_listings WHERE is_demo=0')]
+                output, report = patch_workbook(data, requests, money_cents, required, strict_coverage=False)
+                missing = set(report['missing_registry_ids'])
+                report['missing_registry'] = [{'avito_id': r[0], 'title': r[1]} for r in db.execute('SELECT avito_id,title FROM avito_listings WHERE is_demo=0') if r[0] in missing]
+            except (ValueError, OSError, KeyError, zipfile.BadZipFile, ParseError) as error:
+                raise self.error('Экспорт не подготовлен: '+str(error))
+            report.update({'session_id': identifier, 'factory': plan['factory'], 'created_at': self.now(),
+                           'source_name': filename, 'source_sha256': hashlib.sha256(data).hexdigest(),
+                           'output_sha256': hashlib.sha256(output).hexdigest(),
+                           'filename': 'Avito-prices-'+identifier[:8]+'.xlsx',
+                           'notice': 'Полный исходный файл сохранён. Изменены только выбранные цены. На Авито ничего не отправлено. Перед первой загрузкой проверьте область действия автозагрузки.'})
+            (directory/'prices.xlsx').write_bytes(output)
+            (directory/'report.json').write_text(packed(report), encoding='utf-8')
+            self.price_export_sessions = {k:v for k,v in self.price_export_sessions.items() if time.time()-v['created'] < 3600}
+            if len(self.price_export_sessions) >= 5:
+                del self.price_export_sessions[next(iter(self.price_export_sessions))]
+            self.price_export_sessions[identifier] = {'created': time.time(), 'directory': directory,
+                'plan_id': plan['id'], 'listing_ids': list(identifiers), 'report': report}
+            self.event(db, 'price_file_prepared', report)
+            return report
+
+    def download_price_export(self, payload):
+        with self.catalog.lock, self.catalog.connection() as db:
+            self.ready(db)
+            session = self.price_export_sessions.get(payload.get('session_id'))
+            if not session or time.time()-session['created'] > 3600:
+                raise self.error('Предпросмотр истёк или сервер перезапущен. Подготовьте файл заново.', 409)
+            if payload.get('reviewed_prices') is not True or payload.get('reviewed_full_file') is not True:
+                raise self.error('Подтвердите проверку цен и сохранение полного файла.')
+            if session['report']['missing_registry_ids'] and payload.get('reviewed_missing') is not True:
+                raise self.error('В свежей выгрузке нет части старых записей реестра. Сначала проверьте их состояние в Авито и подтвердите отсутствие в файле.')
+            self._export_items(db, session['plan_id'], session['listing_ids'])
+            output = (session['directory']/'prices.xlsx').read_bytes()
+            if hashlib.sha256(output).hexdigest() != session['report']['output_sha256']:
+                raise self.error('Подготовленный файл изменился. Повторите подготовку.', 409)
+            self.event(db, 'price_file_downloaded', {'session_id': payload['session_id'], 'output_sha256': session['report']['output_sha256'],
+                'reviewed_prices': True, 'reviewed_full_file': True, 'reviewed_missing': payload.get('reviewed_missing') is True})
+            return {'filename': session['report']['filename'], 'content': base64.b64encode(output).decode('ascii'), 'report': session['report']}
 
     def journal(self):
         with self.catalog.lock, self.catalog.connection() as db:

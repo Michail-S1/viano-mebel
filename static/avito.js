@@ -1,7 +1,7 @@
 'use strict';
 // Local-only matching UI, sharing the catalog's api(), esc(), money() and date().
 (() => {
-  const view={page:1,detail:null,selected:null,busy:false,request:0,queue:'suggested',items:[]};
+  const view={page:1,detail:null,selected:null,busy:false,request:0,queue:'suggested',items:[],exportIds:new Set(),exportSession:null};
   const states={conflict:'Проверить товар',price_review:'Проверить изменение цены',price_unknown:'Проверить цену на Авито',unchanged:'Цена совпадает',blocked_transport:'Изменение подготовлено'};
   const decisions={confirm:'Подтверждено',reject:'Кандидат отклонён',unlink:'Связь отменена',leave:'Без соответствия',exclude:'Исключено из синхронизации',restore:'Возвращено на проверку'};
   const plans={prepared:'Подготовлен локально',stale:'Устарел',cancelled:'Отменён'};
@@ -71,7 +71,7 @@
   banner.classList.add('av2-local-banner');banner.textContent='На Авито ничего не отправляется. Здесь вы связываете товары и проверяете цены.';
   workspace.querySelector('.avito-flow').remove();workspace.querySelector('.avito-how').remove();
   const steps=document.createElement('nav');steps.className='av2-steps';steps.setAttribute('aria-label','Этапы работы с Авито');
-  steps.innerHTML='<button data-avito-step="matching"><b>1</b><span><strong>Связать товары</strong><small>Один раз для каждого объявления</small></span></button><button data-avito-step="prices"><b>2</b><span><strong>Проверить цены</strong><small>После обновления прайса</small></span></button><button data-avito-step="transfer"><b>3</b><span><strong>Отправка</strong><small>Как подключить передачу цен</small></span></button>';
+  steps.innerHTML='<button data-avito-step="matching"><b>1</b><span><strong>Связать товары</strong><small>Один раз для каждого объявления</small></span></button><button data-avito-step="prices"><b>2</b><span><strong>Проверить цены</strong><small>После обновления прайса</small></span></button><button data-avito-step="transfer"><b>3</b><span><strong>Скачать Excel</strong><small>Для ручной проверки в Авито</small></span></button>';
   toolbar.before(steps);
   toolbar.firstElementChild.firstChild.textContent='Фабрика';
   const search=$('avitoSearch').closest('label');search.firstChild.textContent='Найти объявление';
@@ -87,11 +87,10 @@
   priceScreen.querySelector('.av2-screen-head').append($('avitoPrepare'));
   $('avitoPrepare').textContent='Сравнить цены';priceScreen.append($('avitoPlan'));workspace.append(priceScreen);
   const transfer=document.createElement('section');transfer.id='avitoTransferScreen';transfer.hidden=true;
-  transfer.innerHTML=`<div class="av2-transfer-intro"><span class="av2-status">ПОКА НЕ ПОДКЛЮЧЕНО</span><h3>Как цены попадут на Авито</h3><p>Связи и сравнения готовы для локальной работы. Передача изменений в ваш аккаунт — следующий отдельный этап.</p></div>
-    <div class="av2-transfer-grid"><article class="avito-card"><span class="av2-eyebrow">УЖЕ РАБОТАЕТ</span><h4>Подготовить цены</h4><ol><li>Загрузить список существующих объявлений.</li><li>Один раз связать объявления с товарами каталога.</li><li>Загрузить новый прайс фабрики обычным способом.</li><li>Проверить новые розничные цены на шаге 2.</li></ol><button class="button secondary" data-avito-step="prices">Перейти к проверке цен</button></article>
-    <article class="avito-card av2-future"><span class="av2-eyebrow">НУЖНО ПОДКЛЮЧИТЬ</span><h4>Передать изменения официально</h4><ol><li>Подтвердить способ изменения ручных объявлений для вашего аккаунта.</li><li>Согласовать обновление 5–10 существующих объявлений.</li><li>Передать цены и сверить результат на Авито.</li><li>После успешного пилота включить обновления по прайсам.</li></ol></article></div>
-    <div class="av2-callout"><strong>Выгрузку из Авито не нужно загружать обратно</strong><p>Ваш Excel — входной список для сопоставления. Сейчас приложение не создаёт файл для автозагрузки и не отправляет изменения в аккаунт.</p></div>
-    <details class="av2-faq"><summary>Что нужно проверить перед подключением</summary><p>Доступен ли в вашем аккаунте официальный API изменения цены ручного объявления или сначала нужен перевод на управление автозагрузкой. Возможность пока не подтверждена: конкретный метод API и формат файла не выбраны.</p><p>Затем проверим идентификаторы, отсутствие дубликатов, сохранение описаний и фотографий, поведение остальных объявлений и способ получения фактической цены. После этого можно реализовать передачу, журнал результатов, ограничения и остановку.</p></details>`;
+  transfer.innerHTML=`<div class="av2-transfer-intro"><span class="av2-status">ФАЙЛ ДЛЯ РУЧНОЙ ПРОВЕРКИ</span><h3>Скачать Excel для Авито</h3><p>Подготовим копию полной выгрузки. Изменим только выбранные цены, используя готовые розничные цены каталога. Прямой отправки и автоматической загрузки нет.</p></div>
+    <div class="av2-callout"><strong>Сначала выберите объявления на шаге 2</strong><p>В свежем сравнении отметьте от 1 до 10 объявлений одной фабрики в столбце «В файл». Комплекты, DEMO и конфликтующие связи недоступны.</p><button class="button secondary" data-avito-step="prices">Выбрать цены</button></div>
+    <form id="avitoExportForm" class="avito-card"><h4>Подготовить полный файл</h4><div id="avitoExportSelection"></div><label class="field">Свежая полная выгрузка Авито<input id="avitoExportFile" type="file" accept=".xlsx" required></label><p>Выберите тот же свежий файл, который загрузили в локальный реестр. Все объявления, листы, Id, AvitoId и остальные поля останутся в файле. Не обрезайте его до выбранных строк.</p><button id="avitoExportPreviewButton" type="submit" class="button primary">Проверить и подготовить Excel</button><div id="avitoExportPreview"></div></form>
+    <details class="av2-faq"><summary>Что делать со скачанным файлом</summary><ol><li>Проверьте таблицу изменений ниже и сохраните исходную выгрузку.</li><li>Перед первым запуском уточните в Авито, какие ручные объявления перейдут под управление автозагрузки. В файле остаются и остальные объявления.</li><li>В кабинете Авито: «Настройки → Проверить файл». После отдельного решения о запуске — «Настроить ручную загрузку», выбрать подготовленный Excel.</li><li>Проверьте отчёт и фактические цены. Скачивание здесь не означает успешное обновление на Авито.</li></ol><p>Авито может отдать приоритет данным файла перед ручными правками. Если после выгрузки редактировали объявления в кабинете, сначала получите новый файл. Остальные цены в полном файле сохраняются из выгрузки.</p></details>`;
   workspace.append(transfer);
   const auxiliary=document.createElement('section');auxiliary.id='avitoAuxiliary';auxiliary.hidden=true;
   auxiliary.innerHTML='<button id="avitoBackToWork" class="text-button">← Вернуться к объявлениям</button>';
@@ -124,6 +123,7 @@
       $('avitoPrepare').disabled=!$('avitoFactory').value;
       if(!$('avitoPlanDetails')?.textContent)$('avitoPlanDetails')?.insertAdjacentHTML('afterbegin','<div class="av2-empty"><h4>Сравнение ещё не открыто</h4><p>Нажмите «Сравнить цены» или откройте сохранённое сравнение ниже.</p></div>');
     }
+    if(mode==='transfer')renderExportSelection();
   }
   async function updateProgress(){
     const data=await api('/api/avito/state');
@@ -305,12 +305,55 @@
     const counts={all:p.items.length,changed:0,review:0,same:0};p.items.forEach(i=>counts[priceGroup(i)]++);
     const rows=p.items.filter(i=>filter==='all' || priceGroup(i)===filter);
     $('avitoPlanDetails').innerHTML='<div class="av2-screen-head"><div><h4>'+esc(p.factory)+' · '+esc(plans[p.state] || p.state)+'</h4><p class="av2-hint">'+esc(date(p.created_at,true))+'</p></div><button class="button secondary" data-avito-step="transfer">Как передать цены на Авито →</button></div>'+(p.state==='stale'?'<p class="notice error">Сравнение устарело. '+esc(p.invalidated_reason || 'Каталог изменился')+'. Подготовьте новое.</p>':'')+'<div class="av2-price-filters">'+Object.entries({all:'Все',changed:'С изменениями',review:'Нужна проверка',same:'Без изменений'}).map(([key,label])=>'<button data-avito-price-filter="'+key+'" aria-pressed="'+(filter===key)+'">'+label+' <b>'+counts[key]+'</b></button>').join('')+'</div>'+(p.is_demo?'<p class="avito-demo">В сравнении есть синтетические записи DEMO.</p>':'')+(p.items.length?'<div class="table-container"><table class="product-table av2-price-table"><thead><tr><th>Объявление / товар</th><th>Цена из выгрузки</th><th>Новая цена каталога</th><th>Разница</th><th>Что проверить</th></tr></thead><tbody>'+rows.map(i=>'<tr><td><strong>№ '+esc(i.avito_id)+'</strong><br>'+esc(i.product_snapshot.name)+'</td><td>'+cents(i.previous_cents)+'<br><small>'+esc(i.observed_at?date(i.observed_at,true):'Дата цены неизвестна')+'</small></td><td><strong>'+cents(i.target_cents)+'</strong></td><td>'+(i.previous_cents===null || i.target_cents===null?'—':cents(i.target_cents-i.previous_cents))+'</td><td><span class="av2-result '+priceGroup(i)+'">'+esc(states[i.state] || i.state)+'</span><details><summary>Подробнее</summary><p>'+i.reasons.map(esc).join('<br>')+'</p><small>'+esc(i.price_source)+'</small></details></td></tr>').join('')+'</tbody></table></div>'+(!rows.length?'<p class="av2-empty">В этой группе строк нет.</p>':''):'<div class="av2-empty"><h4>Нет связанных одиночных объявлений этой фабрики</h4><p>Сначала сохраните хотя бы одну связь с товаром каталога.</p><button class="button secondary" data-avito-step="matching">Выбрать объявления</button></div>')+(p.state==='prepared'?'<button class="text-button av2-cancel-plan" id="avitoCancelPlan">Отменить это сравнение</button>':'');
-    if($('avitoCancelPlan'))$('avitoCancelPlan').onclick=e=>act(e.target,async()=>{await api('/api/avito/plans/'+p.id+'/cancel',{});await refreshPlans();await showPlan(p.id);});
+    const eligible=i=>p.state==='prepared' && !p.is_demo && i.state!=='conflict' && i.state!=='unchanged' && i.target_cents!==null;
+    const table=$('avitoPlanDetails').querySelector('table');
+    if(table){
+      const th=document.createElement('th');th.textContent='В файл';table.querySelector('thead tr').prepend(th);
+      rows.forEach((i,index)=>{const td=document.createElement('td');td.innerHTML='<input type="checkbox" aria-label="Включить объявление '+esc(i.avito_id)+' в Excel" data-avito-export-id="'+esc(i.listing_id)+'" '+(view.exportIds.has(i.listing_id)?'checked ':'')+(eligible(i)?'':'disabled')+'>';table.querySelectorAll('tbody tr')[index].prepend(td);});
+    }
+    $('avitoPlanDetails').insertAdjacentHTML('beforeend','<div class="av2-callout"><strong id="avitoExportCount">Выбрано для Excel: '+view.exportIds.size+' из 10</strong><p>Отметьте нужные объявления в столбце «В файл». Неизвестная или изменившаяся цена требует отдельной проверки по свежей выгрузке на следующем шаге.</p><button class="button primary" data-avito-step="transfer">Подготовить Excel для Авито →</button></div>');
+    if($('avitoCancelPlan'))$('avitoCancelPlan').onclick=e=>act(e.target,async()=>{await api('/api/avito/plans/'+p.id+'/cancel',{});resetExport();await refreshPlans();await showPlan(p.id);});
   }
+  function resetExport(){view.exportIds.clear();view.exportSession=null;if($('avitoExportPreview'))$('avitoExportPreview').innerHTML='';}
+  function renderExportSelection(){
+    const p=view.plan,items=p?.items.filter(i=>view.exportIds.has(i.listing_id)) || [];
+    $('avitoExportSelection').innerHTML=items.length?'<p><strong>'+esc(p.factory)+' · выбрано '+items.length+' из 10</strong></p><ul>'+items.map(i=>'<li>№ '+esc(i.avito_id)+' · '+esc(i.product_snapshot.name)+' → '+cents(i.target_cents)+'</li>').join('')+'</ul>':'<p class="notice">Объявления не выбраны. Откройте сравнение на шаге 2 и поставьте отметки «В файл».</p>';
+    $('avitoExportPreviewButton').disabled=!items.length || p?.state!=='prepared';
+  }
+  function saveDownload(content,name,type){
+    const url=URL.createObjectURL(new Blob([content],{type})),a=document.createElement('a');
+    a.href=url;a.download=name;document.body.append(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),10000);
+  }
+  $('avitoExportFile').onchange=()=>{view.exportSession=null;$('avitoExportPreview').innerHTML='';};
+  $('avitoExportForm').onsubmit=e=>{e.preventDefault();act($('avitoExportPreviewButton'),async()=>{
+    const file=$('avitoExportFile').files[0];if(!file)throw new Error('Выберите свежую полную выгрузку Авито.');
+    if(file.size>30*1024*1024)throw new Error('Файл превышает 30 МБ.');
+    if(!view.plan || !view.exportIds.size)throw new Error('Выберите объявления на шаге 2.');
+    view.exportSession=null;$('avitoExportPreview').innerHTML='';
+    const r=await api('/api/avito/export/preview',{...await readFile(file),plan_id:view.plan.id,listing_ids:[...view.exportIds]});
+    view.exportSession=r.session_id;
+    $('avitoExportPreview').innerHTML='<h4>Файл проверен: '+r.changes.length+' цен к замене</h4><p>Всего объявлений в файле: '+r.total_listings+'. Без изменения цены: '+r.unchanged_listings+'. Все листы и остальные данные сохранены.</p><div class="table-container"><table class="product-table"><thead><tr><th>Объявление</th><th>Цена в свежем файле</th><th>Новая цена</th><th>Разница</th></tr></thead><tbody>'+r.changes.map(i=>'<tr><td>№ '+esc(i.avito_id)+'<br>'+esc(i.title)+'</td><td>'+cents(i.previous_cents)+'</td><td>'+cents(i.target_cents)+'</td><td>'+cents(i.target_cents-i.previous_cents)+'</td></tr>').join('')+'</tbody></table></div><label class="check-label"><input id="avitoExportPricesChecked" type="checkbox"><span>Проверил текущие цены на Авито и подтверждаю выбранные замены, в том числе возможные ручные изменения цены.</span></label><label class="check-label"><input id="avitoExportFullChecked" type="checkbox"><span>Проверил, что это свежая полная выгрузка. Сохраню исходник и не буду удалять остальные строки из подготовленного файла.</span></label><button type="button" id="avitoExportDownload" class="button primary">Скачать Excel с новыми ценами</button> <button type="button" id="avitoExportReport" class="button secondary">Скачать отчёт изменений</button><p class="notice">'+esc(r.notice)+'</p>';
+    $('avitoExportReport').onclick=()=>saveDownload(JSON.stringify(r,null,2),'Avito-price-changes.json','application/json');
+    if(r.missing_registry?.length){
+      $('avitoExportDownload').insertAdjacentHTML('beforebegin','<div class="notice error"><strong>В свежем файле нет '+r.missing_registry.length+' старых записей локального реестра</strong><p>Экспорт не удалял эти строки: их нет в исходной выгрузке. Не добавляем их автоматически, чтобы не восстановить снятые объявления. Проверьте их состояние в кабинете перед загрузкой.</p><ul>'+r.missing_registry.map(i=>'<li>№ '+esc(i.avito_id)+' · '+esc(i.title)+'</li>').join('')+'</ul><label class="check-label"><input id="avitoExportMissingChecked" type="checkbox"><span>Проверил эти объявления в Авито: они не должны входить в этот файл.</span></label></div>');
+    }
+    $('avitoExportDownload').onclick=e=>act(e.target,async()=>{
+      const d=await api('/api/avito/export/download',{session_id:view.exportSession,reviewed_prices:$('avitoExportPricesChecked').checked,reviewed_full_file:$('avitoExportFullChecked').checked,reviewed_missing:$('avitoExportMissingChecked')?.checked || false});
+      const binary=atob(d.content),bytes=Uint8Array.from(binary,c=>c.charCodeAt(0));
+      saveDownload(bytes,d.filename,'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+      toast('Excel скачан. На Авито ничего не отправлено.');
+    });
+  });};
+  $('avitoSection').addEventListener('change',e=>{
+    const id=e.target.dataset.avitoExportId;if(!id)return;
+    if(e.target.checked && view.exportIds.size>=10){e.target.checked=false;toast('Для первого теста — не больше 10 цен.',true);return;}
+    e.target.checked?view.exportIds.add(id):view.exportIds.delete(id);view.exportSession=null;$('avitoExportPreview').innerHTML='';
+    if($('avitoExportCount'))$('avitoExportCount').textContent='Выбрано для Excel: '+view.exportIds.size+' из 10';
+  });
   async function showPlan(id){
     const p=await api('/api/avito/plans/'+id);
     if(p.factory!==$('avitoFactory').value)return;
-    view.plan=p;renderPricePlan(p);
+    if(view.plan?.id!==p.id)resetExport();view.plan=p;renderPricePlan(p);
   }
   $('navAvito').onclick=open;
   $('avitoSetupButton').onclick=e=>act(e.target,async()=>{const r=await api('/api/avito/setup',{});toast(r.backup?'Резервная копия: '+r.backup:'Раздел уже подготовлен');await open();});
@@ -325,7 +368,7 @@
   $('avitoJournalButton').onclick=e=>act(e.target,async()=>{const d=await api('/api/avito/journal');showScreen('journal');$('avitoHistory').innerHTML='<h3>Журнал действий на компьютере</h3><p>До 200 последних событий. Отправки на Авито нет.</p>'+d.items.map(i=>'<details><summary>'+esc(date(i.created_at,true))+' · '+esc(i.kind)+'</summary><pre>'+esc(i.details)+'</pre></details>').join('');});
   $('avitoFactory').onchange=async()=>{
     try{sessionStorage.setItem('avito.factory',$('avitoFactory').value);}catch{}
-    view.page=1;view.detail=null;view.plan=null;$('avitoType').value='';$('avitoCollection').value='';$('avitoSearch').value='';$('avitoFilter').value='';
+    view.page=1;view.detail=null;view.plan=null;resetExport();$('avitoType').value='';$('avitoCollection').value='';$('avitoSearch').value='';$('avitoFilter').value='';
     const mode=view.mode==='prices'?'prices':'matching';
     renderPlans([]);showScreen(mode);
     try{await listings();await refreshPlans();if(view.mode===mode)showScreen(mode);}catch(e){fail(e);}

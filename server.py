@@ -40,7 +40,7 @@ try:
 except ImportError:
     Image = ImageOps = None
 
-VERSION = "1.3.0"
+VERSION = "1.3.1"
 TEXT_FIELDS = ("name", "factory", "collection", "sku", "color", "dimensions", "variant")
 SOURCE_FIELDS = TEXT_FIELDS + ("base_price", "source_file", "source_sheet", "source_row")
 DEFAULTS = {"markup_percent": 20, "fixed_add": 1000, "rounding": "ruble"}
@@ -1135,6 +1135,10 @@ class Handler(BaseHTTPRequestHandler):
                 return service.decide(payload)
             if path == "/api/avito/prepare":
                 return service.prepare(payload)
+            if path == "/api/avito/export/preview":
+                return service.preview_price_export(decode_file(payload, 30*1024*1024), clean_name(payload.get('name', '')), payload)
+            if path == "/api/avito/export/download":
+                return service.download_price_export(payload)
             if re.fullmatch(r"/api/avito/plans/[a-f0-9]{32}/cancel", path):
                 return service.cancel(path.split("/")[4])
         raise ApiError("Операция Авито не найдена.", 404)
