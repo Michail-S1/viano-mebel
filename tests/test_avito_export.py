@@ -51,7 +51,10 @@ class PriceExport(unittest.TestCase):
         self.assertEqual(preview['total_listings'], 2)  # vacancy remains in full file
         self.assertEqual(preview['unchanged_listings'], 1)
         self.assertEqual(preview['changes'][0]['target_cents'], money_cents(self.fixture.region['sale_price']))
-        output = base64.b64decode(self.download(preview)['content'])
+        output = (self.avito.price_export_sessions[preview['session_id']]['directory']/'prices.xlsx').read_bytes()
+        self.assertFalse(preview['upload_allowed'])
+        self.assertEqual(preview['selected_found_count'], 1)
+        self.assertEqual(preview['selected_items'][0]['avito_id'], self.listing['avito_id'])
         with zipfile.ZipFile(io.BytesIO(self.source)) as a, zipfile.ZipFile(io.BytesIO(output)) as b:
             self.assertEqual(a.namelist(), b.namelist())
             different = [n for n in a.namelist() if a.read(n) != b.read(n)]
@@ -61,7 +64,7 @@ class PriceExport(unittest.TestCase):
             self.assertEqual(db.execute('SELECT price_cents FROM avito_listings').fetchone()[0], 1500000)
             kinds = [r[0] for r in db.execute('SELECT kind FROM avito_events')]
         self.assertIn('price_file_prepared', kinds)
-        self.assertIn('price_file_downloaded', kinds)
+        self.assertNotIn('price_file_downloaded', kinds)
 
     def test_explicit_checks_required_and_file_is_not_sent(self):
         preview = self.preview()
@@ -73,11 +76,15 @@ class PriceExport(unittest.TestCase):
         preview = self.preview()
         self.fixture.catalog.settings({'markup_percent': 30, 'fixed_add': 1000, 'rounding': 'ruble'})
         with self.assertRaises(ApiError):
+            self.preview()
+        with self.assertRaises(ApiError):
             self.download(preview)
 
     def test_unlink_after_preview_blocks_download(self):
         preview = self.preview()
         self.avito.decide(self.fixture.decision_payload(self.listing, self.fixture.region, 'unlink'))
+        with self.assertRaises(ApiError):
+            self.preview()
         with self.assertRaises(ApiError):
             self.download(preview)
 
@@ -151,9 +158,12 @@ class PriceExport(unittest.TestCase):
         self.assertEqual(preview['missing_registry_ids'], ['5555555'])
         with self.assertRaises(ApiError):
             self.download(preview)
-        result = self.avito.download_price_export({'session_id': preview['session_id'], 'reviewed_prices': True,
-            'reviewed_full_file': True, 'reviewed_missing': True})
-        self.assertEqual(result['report']['total_listings'], 2)
+        self.assertEqual(preview['selected_found_count'], 1)
+        self.assertNotIn(self.listing['avito_id'], preview['missing_registry_ids'])
+        with self.assertRaises(ApiError) as denied:
+            self.avito.download_price_export({'session_id': preview['session_id'], 'reviewed_prices': True,
+                'reviewed_full_file': True, 'reviewed_missing': True, 'upload_allowed': True})
+        self.assertEqual(denied.exception.status, 403)
 
     def test_only_the_imported_source_workbook_can_be_used(self):
         data = self.replace_member(self.source, lambda n, b: b.replace(b'PRIVATE-PHONE', b'DIFFERENT-PHONE') if n.endswith('sheet1.xml') else b)
@@ -191,9 +201,9 @@ class PriceExport(unittest.TestCase):
             plan = client.request('POST', '/api/avito/prepare', {'factory': 'Регион 058'})
             payload = {'name': 'fresh.xlsx', 'content': base64.b64encode(self.source).decode(), 'plan_id': plan['id'], 'listing_ids': [listing['id']]}
             preview = client.request('POST', '/api/avito/export/preview', payload)
-            downloaded = client.request('POST', '/api/avito/export/download', {'session_id': preview['session_id'], 'reviewed_prices': True, 'reviewed_full_file': True})
-            self.assertTrue(base64.b64decode(downloaded['content']).startswith(b'PK'))
-            self.assertEqual(len(downloaded['report']['changes']), 1)
+            self.assertFalse(preview['upload_allowed'])
+            self.assertEqual(preview['selected_found_count'], 1)
+            client.expect_http_error('POST', '/api/avito/export/download', {'session_id': preview['session_id'], 'reviewed_prices': True, 'reviewed_full_file': True, 'reviewed_missing': True}, statuses=(403,)).close()
             client.expect_http_error('POST', '/api/avito/export/preview', payload, headers={'Origin': 'https://foreign.example'}, statuses=(403,)).close()
             client.expect_http_error('POST', '/api/avito/send', {}, statuses=(403,)).close()
         finally:

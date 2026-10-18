@@ -1,6 +1,5 @@
 """Local matching and dry-run plans only. This module has no network transport."""
 import hashlib
-import base64
 import json
 import re
 import uuid
@@ -91,6 +90,7 @@ class Avito:
             version = migrations.installed(self.catalog, db)
             base = {"installed": version == migrations.VERSION, "schema_version": version,
                     "transport_enabled": False, "export_adapter_ready": True,
+                    "autoload_download_enabled": False,
                     "labels": LABELS, "pilot_factory": "Регион 058"}
             if not base["installed"]:
                 return base
@@ -602,10 +602,15 @@ class Avito:
             except (ValueError, OSError, KeyError, zipfile.BadZipFile, ParseError) as error:
                 raise self.error('Экспорт не подготовлен: '+str(error))
             report.update({'session_id': identifier, 'factory': plan['factory'], 'created_at': self.now(),
+                           'upload_allowed': False,
+                           'selected_count': len(items), 'selected_found_count': len(items),
+                           'selected_items': [{'avito_id': item['avito_id'], 'title': listing['title'],
+                               'product_name': item['product_snapshot']['name'], 'target_cents': item['target_cents'],
+                               'found_in_source': True} for item, listing in items],
                            'source_name': filename, 'source_sha256': hashlib.sha256(data).hexdigest(),
                            'output_sha256': hashlib.sha256(output).hexdigest(),
                            'filename': 'Avito-prices-'+identifier[:8]+'.xlsx',
-                           'notice': 'Полный исходный файл сохранён. Изменены только выбранные цены. На Авито ничего не отправлено. Перед первой загрузкой проверьте область действия автозагрузки.'})
+                           'notice': 'Только локальная проверка. Скачивание Excel для автозагрузки заблокировано: не подтверждено, что Авито применит только выбранные цены и не затронет остальные строки. Изменение нескольких ячеек в Excel не ограничивает область обработки файла на Авито.'})
             (directory/'prices.xlsx').write_bytes(output)
             (directory/'report.json').write_text(packed(report), encoding='utf-8')
             self.price_export_sessions = {k:v for k,v in self.price_export_sessions.items() if time.time()-v['created'] < 3600}
@@ -617,22 +622,9 @@ class Avito:
             return report
 
     def download_price_export(self, payload):
-        with self.catalog.lock, self.catalog.connection() as db:
-            self.ready(db)
-            session = self.price_export_sessions.get(payload.get('session_id'))
-            if not session or time.time()-session['created'] > 3600:
-                raise self.error('Предпросмотр истёк или сервер перезапущен. Подготовьте файл заново.', 409)
-            if payload.get('reviewed_prices') is not True or payload.get('reviewed_full_file') is not True:
-                raise self.error('Подтвердите проверку цен и сохранение полного файла.')
-            if session['report']['missing_registry_ids'] and payload.get('reviewed_missing') is not True:
-                raise self.error('В свежей выгрузке нет части старых записей реестра. Сначала проверьте их состояние в Авито и подтвердите отсутствие в файле.')
-            self._export_items(db, session['plan_id'], session['listing_ids'])
-            output = (session['directory']/'prices.xlsx').read_bytes()
-            if hashlib.sha256(output).hexdigest() != session['report']['output_sha256']:
-                raise self.error('Подготовленный файл изменился. Повторите подготовку.', 409)
-            self.event(db, 'price_file_downloaded', {'session_id': payload['session_id'], 'output_sha256': session['report']['output_sha256'],
-                'reviewed_prices': True, 'reviewed_full_file': True, 'reviewed_missing': payload.get('reviewed_missing') is True})
-            return {'filename': session['report']['filename'], 'content': base64.b64encode(output).decode('ascii'), 'report': session['report']}
+        # A locally correct workbook is not proof of price-only processing by Avito.
+        # Neither a checkbox nor a cached 1.3.1 session can establish that guarantee.
+        raise self.error('Скачивание Excel для автозагрузки заблокировано: область применения полного файла на Авито не подтверждена. Доступны только проверка и отчёт изменений. Ранее скачанные файлы пока не загружайте.', 403)
 
     def journal(self):
         with self.catalog.lock, self.catalog.connection() as db:
