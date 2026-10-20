@@ -31,6 +31,7 @@ ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT / "vendor"))
 from backend.importer import inspect_file, parse_file, product_key, normalize_text
 from backend.colors import derive_color
+from backend.catalog_identity import semantic_key, semantic_index, original_key, repair_plan, apply_plan
 from backend.images import product_pictures
 from backend.dimensions import make_matcher
 from backend.avito import Avito
@@ -40,9 +41,9 @@ try:
 except ImportError:
     Image = ImageOps = None
 
-VERSION = "1.3.3"
+VERSION = "1.3.4"
 TEXT_FIELDS = ("name", "factory", "collection", "sku", "color", "dimensions", "variant")
-SOURCE_FIELDS = TEXT_FIELDS + ("base_price", "source_file", "source_sheet", "source_row")
+SOURCE_FIELDS = TEXT_FIELDS + ("base_price", "source_file", "source_sheet", "source_row", "identity_context")
 DEFAULTS = {"markup_percent": 20, "fixed_add": 1000, "rounding": "ruble"}
 MAX_BODY = 240 * 1024 * 1024
 
@@ -148,8 +149,35 @@ class Catalog:
                 folder.update({"pending_session": None, "status": "watching" if folder.get("watch") else "idle"})
                 self.set_meta(db, "folder", folder)
         self.avito = Avito(self, ApiError, now)
+        self.repair_catalog_identity()
         self.watcher = threading.Thread(target=self.watch_loop, name="Folder watcher", daemon=True)
         self.watcher.start()
+
+    def repair_catalog_identity(self, force=False):
+        """Repair only proven supplier equivalences, after a complete recoverable backup."""
+        with self.lock:
+            with self.connection() as db:
+                if self.meta(db, "catalog_identity_version") == 1 and not force:
+                    return self.meta(db, "catalog_identity_repair") or {"removed": 0}
+                revision = self.meta(db, "revision")
+                plan = repair_plan(db)
+            backup = None
+            if plan["groups"]:
+                archive = self.backup()
+                directory = self.data_dir / "backups"
+                directory.mkdir(exist_ok=True)
+                backup = directory / ("before-duplicate-repair-" + uuid.uuid4().hex + ".zip")
+                with backup.open("xb") as output:
+                    output.write(archive)
+            with self.connection() as db:
+                db.execute("BEGIN IMMEDIATE")
+                if revision != self.meta(db, "revision"):
+                    raise ApiError("Каталог изменился во время проверки повторов. Перезапустите программу.", 409)
+                result = apply_plan(self, db, plan)
+                result.update({"backup": str(backup) if backup else None, "created_at": now()})
+                self.set_meta(db, "catalog_identity_version", 1)
+                self.set_meta(db, "catalog_identity_repair", result)
+            return result
 
     @contextmanager
     def connection(self):
@@ -469,14 +497,25 @@ class Catalog:
 
             by_key = collections.OrderedDict()
             for product in candidates:
-                by_key.setdefault(product_key(product), []).append(product)
+                by_key.setdefault(semantic_key(product) or product_key(product), []).append(product)
             actions, result_items = [], list(issues)
+            identity_aliases = []
             photo_actions, photo_count, photo_products = [], 0, 0
             counts = {"new": 0, "updated": 0, "duplicates": 0, "issues": len(issues)}
             with self.connection() as db:
                 settings = self.meta(db, "settings")
-                for identity, batch in by_key.items():
+                equivalents = semantic_index(db, {p["factory"] for p in candidates if semantic_key(p)})
+                for grouped_key, batch in by_key.items():
                     first = batch[0]
+                    identity = product_key(first)
+                    equivalent = semantic_key(first)
+                    matches = equivalents.get(equivalent, []) if equivalent else []
+                    if len(matches) > 1:
+                        counts["issues"] += len(batch)
+                        for product in batch:
+                            result_items.append({**product, "status": "issue",
+                                "message": "В каталоге несколько совпадений. Проверьте варианты перед обновлением."})
+                        continue
                     distinct_prices = {round(float(p["base_price"]), 8) for p in batch}
                     distinct_names = {search_normalize(p["name"]) for p in batch}
                     if len(distinct_prices) > 1 or len(distinct_names) > 1:
@@ -485,10 +524,26 @@ class Catalog:
                             result_items.append({**product, "status": "issue",
                                 "message": "Одна позиция с разными ценами или названиями в загружаемых файлах. Проверьте источник."})
                         continue
-                    existing_id = db.execute(
-                        "SELECT id FROM products WHERE identity_key=? UNION "
-                        "SELECT product_id FROM aliases WHERE identity_key=? LIMIT 1",
-                        (identity, identity)).fetchone()
+                    keys = (identity, equivalent or identity)
+                    found = db.execute(
+                        "SELECT id FROM products WHERE identity_key IN (?,?) UNION "
+                        "SELECT product_id FROM aliases WHERE identity_key IN (?,?)",
+                        keys + keys).fetchall()
+                    found_ids = {row[0] for row in found} | set(matches)
+                    if len(found_ids) > 1:
+                        counts["issues"] += len(batch)
+                        result_items.append({**first, "status": "issue", "message": "Противоречивые совпадения в каталоге. Требуется проверка."})
+                        continue
+                    if not found_ids:
+                        legacy_key = original_key(first)
+                        legacy = db.execute("SELECT id FROM products WHERE identity_key=? UNION "
+                            "SELECT product_id FROM aliases WHERE identity_key=? LIMIT 1", (legacy_key, legacy_key)).fetchone() if legacy_key else None
+                        if legacy:
+                            counts["issues"] += len(batch)
+                            result_items.append({**first, "status": "issue",
+                                "message": "Тот же товар ранее записан с другой коллекцией. Проверьте принадлежность; новая копия не добавлена."})
+                            continue
+                    existing_id = (next(iter(found_ids)),) if found_ids else None
                     existing = db.execute("SELECT * FROM products WHERE id=?", (existing_id[0],)).fetchone() if existing_id else None
                     target_id = existing["id"] if existing is not None else uuid.uuid4().hex
                     if existing is not None:
@@ -511,7 +566,9 @@ class Catalog:
                         status = "new"
                         counts["new"] += 1
                         actions.append({"status": status, "id": target_id, "key": identity, "product": first})
-                    photo_keys = candidate_photos.get(identity, [])
+                    identity_aliases.extend((key, target_id) for key in (identity, equivalent) if key)
+                    photo_keys = list(dict.fromkeys(digest for product in batch
+                                     for digest in candidate_photos.get(product_key(product), [])))
                     known = set(self.meta(db, "excel_photos:" + target_id) or [])
                     pending = [digest for digest in photo_keys if digest not in known][:20]
                     existing_hashes = self.photo_content_hashes(db, target_id)
@@ -533,7 +590,7 @@ class Catalog:
                         for duplicate in batch[1:]:
                             result_items.append({**duplicate, "status": "duplicate",
                                                  "message": "Повтор строки в загруженных прайсах."})
-                session.update({"actions": actions, "mode": mode, "counts": counts,
+                session.update({"actions": actions, "identity_aliases": identity_aliases, "mode": mode, "counts": counts,
                                 "configs": configs, "details": result_items,
                                 "revision": self.meta(db, "revision"), "photo_actions": photo_actions,
                                 "photo_assets": photo_assets, "photos_count": photo_count})
@@ -654,6 +711,11 @@ class Catalog:
                                 ",base_price=?,source_file=?,source_sheet=?,source_row=?,imported_at=?,source_values=?,search_text=? WHERE id=?",
                                 list(display.values()) + [source["base_price"], source["source_file"], source["source_sheet"],
                                 source["source_row"], imported_at, compact(source), search, action["id"]])
+                    for key, product_id in session.get("identity_aliases", []):
+                        found = db.execute("SELECT product_id FROM aliases WHERE identity_key=?", (key,)).fetchone()
+                        if found and found[0] != product_id:
+                            raise ApiError("Совпадение товара изменилось. Обновите предварительный просмотр.", 409)
+                        db.execute("INSERT OR IGNORE INTO aliases VALUES (?,?)", (key, product_id))
                     for config in session["configs"]:
                         name = session["files"][config["file_id"]]["name"]
                         db.execute("INSERT OR REPLACE INTO profiles VALUES (?,?,?,?,?)",

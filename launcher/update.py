@@ -225,7 +225,7 @@ def start_server(root, data_dir, port, log):
                             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
 
 def wait_ready(port, process, expected=None):
-    deadline = time.monotonic() + 25
+    deadline = time.monotonic() + 120
     while time.monotonic() < deadline:
         try:
             with urllib.request.urlopen(f"http://127.0.0.1:{port}/api/state", timeout=1) as response:

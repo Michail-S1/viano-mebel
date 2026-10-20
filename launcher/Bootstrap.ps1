@@ -251,7 +251,7 @@ function Start-VianoCatalog {
     if ($NoBrowser) { $taskArgs += '--no-browser' }
     if ($Port -ne 8765) { $taskArgs += @('--port',[string]$Port) }
     $taskProcess = Start-Process -FilePath $Python.Path -ArgumentList $taskArgs -WorkingDirectory $AppRoot -WindowStyle Hidden -PassThru -RedirectStandardOutput $taskStdout -RedirectStandardError $taskStderr
-    for ($taskAttempt = 0; $taskAttempt -lt 20; $taskAttempt++) {
+    for ($taskAttempt = 0; $taskAttempt -lt 400; $taskAttempt++) {
         if (Test-VianoCatalogReady -Port $Port) {
             Write-Host ('Виано Мебель запущена: http://127.0.0.1:' + $Port + '/') -ForegroundColor Green
             if ($PassThru) { return $taskProcess }

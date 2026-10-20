@@ -17,6 +17,7 @@ from dataclasses import dataclass, field
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
+from .catalog_identity import header_context, normalize_product
 from xml.etree import ElementTree as ET
 
 FIELDS = ("name", "price", "sku", "color", "dimensions", "width", "height", "depth", "collection")
@@ -498,6 +499,7 @@ def _parse_sheet(sheet: Sheet, filename: str, factory: str, configuration: dict)
         variant = "Фасад"
     elif "модул" in price_label:
         variant = "Модуль"
+    identity_context = header_context(actual_factory, sheet.name, headers, mapping)
     # Component-specific prices must use the matching component article.
     stand_kitchen = default.get("sku") == "E+H"
     if stand_kitchen and mapping.get("sku") in ("E+H", None):
@@ -634,6 +636,7 @@ def _parse_sheet(sheet: Sheet, filename: str, factory: str, configuration: dict)
         if price is None or price <= 0:
             issues.append({"message": "Нет корректной исходной цены: " + name,
                            "source_file": filename, "source_sheet": sheet.name, "source_row": number})
+        product = normalize_product(product, identity_context)
         products.append(product)
         last_named = {"name": name, "row": number, "color": color,
                       "price": price, "dimensions": dimensions}
