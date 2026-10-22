@@ -34,6 +34,7 @@ from backend.colors import derive_color
 from backend.catalog_identity import semantic_key, semantic_index, original_key, repair_plan, apply_plan
 from backend.images import product_pictures
 from backend.dimensions import make_matcher
+from backend.search import is_short_word, whole_word_matches
 from backend.avito import Avito
 from launcher import update as updater
 try:
@@ -41,7 +42,7 @@ try:
 except ImportError:
     Image = ImageOps = None
 
-VERSION = "1.3.4"
+VERSION = "1.3.5"
 TEXT_FIELDS = ("name", "factory", "collection", "sku", "color", "dimensions", "variant")
 SOURCE_FIELDS = TEXT_FIELDS + ("base_price", "source_file", "source_sheet", "source_row", "identity_context")
 DEFAULTS = {"markup_percent": 20, "fixed_add": 1000, "rounding": "ruble"}
@@ -256,9 +257,13 @@ class Catalog:
         with self.lock, self.connection() as db:
             settings = self.meta(db, "settings")
             sql, values = ["1=1"], []
+            db.create_function("whole_word_matches", 2, whole_word_matches)
             for term in search_normalize(params.get("q", "")).split():
                 sql.append("instr(search_text,?)>0")
                 values.append(term)
+                if is_short_word(term):
+                    sql.append("whole_word_matches(search_text,?)=1")
+                    values.append(term)
             for field in ("factory", "collection"):
                 if params.get(field):
                     sql.append(field + "=?")

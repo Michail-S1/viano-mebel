@@ -83,6 +83,19 @@ class MatchingEvidence(unittest.TestCase):
         self.assertFalse(search_matches('Комод К-3.60 МДФ', 'К3.6'))
         self.assertFalse(search_matches('Кровать 1900', '900'))
 
+    def test_manual_search_short_designations_are_whole_words(self):
+        for query, matching, unrelated in [
+                ('кр', 'КР-01 Кровать', 'Тумба прикроватная'),
+                ('кп', 'Кровать КП-554', 'КПТ 215'),
+                ('шк', 'ШК-5 белый', 'Шкаф белый'),
+                ('мсп', 'МСП-1 Модуль', 'МСПП-1 Модуль')]:
+            with self.subTest(query=query):
+                self.assertTrue(search_matches(matching, query.upper()))
+                self.assertFalse(search_matches(unrelated, query))
+        self.assertTrue(search_matches('КР-01 Кровать Лира', 'кр лира'))
+        self.assertFalse(search_matches('Кровать Лира', 'кр лира'))
+        self.assertTrue(search_matches('Тумба прикроватная', 'кроват'))
+
     def test_sleep_width_ranks_correct_bed_without_guessing_unlabelled_units(self):
         listing = self.listing('Новая кровать Калипсо от фабрики Росток. Спальное место — 90 × 200 см', title='Кровать детская')
         small = evaluate(listing, self.product('Кровать Калипсо 900', 'Калипсо'))

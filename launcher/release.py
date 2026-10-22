@@ -56,7 +56,7 @@ def build_release(root, output, url=None):
         temporary.unlink(missing_ok=True)
     manifest = {"app": APP, "version": version, "url": url or target.name,
                 "sha256": hashlib.sha256(target.read_bytes()).hexdigest(),
-                "notes": "Исправлены повторы при обновлении прайсов ДСВ и SV: смена формата ширины, пометки модуля и общей палитры больше не создаёт копии. Подтверждённые повторы объединяются с резервной копией, сохранением старых ID, ручных правок и фото."}
+                "notes": "Короткие обозначения из 1–3 букв (КР, КП, ШК и другие) ищутся по целому слову без учёта регистра. Исправлены поиск в каталоге и ручной поиск в разделе Авито; длинные запросы сохраняют поиск по части слова."}
     (output / "latest.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
     return target
 

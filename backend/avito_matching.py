@@ -7,6 +7,7 @@ from difflib import SequenceMatcher
 from backend.importer import normalize_text
 from backend.colors import derive_color
 from backend.avito_dimensions import compare as compare_dimensions
+from backend.search import is_short_word, whole_word_matches
 
 
 LABELS = {
@@ -213,7 +214,8 @@ def search_matches(text, query):
     codes = re.findall(r"\b[a-zа-я]{1,4}[- ]?\d+(?:[.-]\d+)*\b", norm(query))
     if any(not model_in(text, code) for code in codes):
         return False
-    return all((' '+word+' ') in value if word.isdigit() else word in value for word in identifier_text(query).split())
+    return all(whole_word_matches(value, word) if word.isdigit() or is_short_word(word) else word in value
+               for word in identifier_text(query).split())
 
 
 @lru_cache(maxsize=2048)

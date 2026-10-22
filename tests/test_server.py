@@ -389,6 +389,48 @@ class CatalogAPI(unittest.TestCase):
         self.commit([["A1", "Комод Лира", "Лира", "Белый", "", 15000]], "update")
         self.assertEqual(len(self.products()), 2)
 
+    def test_short_designations_match_whole_words_case_insensitively(self):
+        names = ["КР", "КР-01", "(кР)", "КРП", "АКР", "КР01", "Кровать",
+                 "Тумба прикроватная", "КП-554", "КПТ-215", "ШК-5", "Шкаф", "МСП-1"]
+        self.commit([[f"A{i}", name, "Лира", "", "", 1000] for i,name in enumerate(names)])
+        for query, expected in [("кр", {"КР", "КР-01", "(кР)"}),
+                                ("КР", {"КР", "КР-01", "(кР)"}),
+                                ("кР", {"КР", "КР-01", "(кР)"}),
+                                ("кп", {"КП-554"}), ("Шк", {"ШК-5"}),
+                                ("мсп", {"МСП-1"}), ("мс", set())]:
+            with self.subTest(query=query):
+                result = self.request("GET", "/api/products?q=" + urllib.parse.quote(query))
+                self.assertEqual({p["name"] for p in result["items"]}, expected)
+                self.assertEqual(result["total"], len(expected))
+        # Longer terms retain substring matching.
+        result = self.request("GET", "/api/products?q=" + urllib.parse.quote("кроват"))
+        self.assertEqual({p["name"] for p in result["items"]}, {"Кровать", "Тумба прикроватная"})
+
+    def test_short_designations_work_in_mixed_queries_filters_pages_and_edits(self):
+        self.commit([
+            ["A1", "КР-01", "Лира", "Белый", "800×400×900 мм", 1000],
+            ["A2", "КР-02", "Лира", "Дуб", "800×400×900 мм", 2000],
+            ["A3", "КРП", "Лира", "Белый", "800×400×900 мм", 1000],
+            ["A4", "Кровать", "Лира", "Белый", "800×400×900 мм", 1000],
+            ["КР", "Пенал", "Другая", "", "", 1000],
+        ])
+        self.commit([["B1", "КР-03", "Лира", "", "800×400×900 мм", 1500]], factory="Другая фабрика")
+        params = {"q":"кр лиРА", "factory":"Фабрика Тест", "dimensions":"800",
+                  "min":"2100", "max":"3500", "page_size":1, "sort":"price_asc"}
+        first = self.request("GET", "/api/products?" + urllib.parse.urlencode(params))
+        self.assertEqual((first["total"], first["pages"]), (2,2))
+        self.assertEqual(first["items"][0]["name"], "КР-01")
+        params["page"] = 2
+        second = self.request("GET", "/api/products?" + urllib.parse.urlencode(params))
+        self.assertEqual(second["items"][0]["name"], "КР-02")
+        identifier = first["items"][0]["id"]
+        self.request("PATCH", "/api/products/" + identifier, {"name":"ШК-01"})
+        remaining = self.request("GET", "/api/products?" + urllib.parse.urlencode(params))
+        self.assertEqual(remaining["total"],1)
+        # A separately stored SKU is also searched by whole word.
+        result = self.request("GET", "/api/products?" + urllib.parse.urlencode({"q":"кр пенал"}))
+        self.assertEqual([p["sku"] for p in result["items"]], ["КР"])
+
     def test_derived_color_keeps_raw_identity_photos_after_import_restart_restore(self):
         rows = [
             ["BLUE", "Фасад Блю", "Лира", "", "", 10000],
