@@ -42,9 +42,9 @@ try:
 except ImportError:
     Image = ImageOps = None
 
-VERSION = "1.3.5"
+VERSION = "1.4.0"
 TEXT_FIELDS = ("name", "factory", "collection", "sku", "color", "dimensions", "variant")
-SOURCE_FIELDS = TEXT_FIELDS + ("base_price", "source_file", "source_sheet", "source_row", "identity_context")
+SOURCE_FIELDS = TEXT_FIELDS + ("base_price", "source_file", "source_sheet", "source_row", "identity_context", "name_context")
 DEFAULTS = {"markup_percent": 20, "fixed_add": 1000, "rounding": "ruble"}
 MAX_BODY = 240 * 1024 * 1024
 
@@ -93,6 +93,7 @@ def search_normalize(value):
 
 def profile_family(name):
     text = search_normalize(Path(name).stem)
+    text = re.sub(r"^((?:ostatki|остатки))[_ -]+\d{1,2}[._-]\d{1,2}(?:[._-]\d{2,4})?", r"\1", text)
     text = re.sub(r"\d{1,2}[._/-]\d{1,2}[._/-]\d{2,4}", "", text)
     text = re.sub(r"\b(?:от|с)\b", "", text)
     return re.sub(r"\s+", " ", text).strip()
@@ -207,7 +208,8 @@ class Catalog:
         result = dict(row)
         result.pop("identity_key", None)
         result.pop("search_text", None)
-        result.pop("source_values", None)
+        source_values = json.loads(result.pop("source_values", "{}"))
+        result["name_context"] = source_values.get("name_context")
         result["overrides"] = json.loads(result.get("overrides", "{}"))
         if "color" not in result["overrides"]:
             result["color"] = derive_color(result["name"], collection=result["collection"],
@@ -324,6 +326,39 @@ class Catalog:
             return {"items": [self.serialize_product(db, r, settings) for r in rows],
                     "total": total, "page": page, "pages": pages, "dimension_filter": dimension_filter}
 
+    def quote_selection(self, payload):
+        items = payload.get("items")
+        if not isinstance(items,list) or len(items)>500:
+            raise ApiError("В комплекте может быть до 500 разных позиций.")
+        selected = collections.OrderedDict()
+        for item in items:
+            if not isinstance(item,dict) or not isinstance(item.get("id"),str) or not 1<=len(item["id"])<=200:
+                raise ApiError("Некорректная позиция комплекта.")
+            quantity = item.get("quantity")
+            if isinstance(quantity,bool) or not isinstance(quantity,int) or not 1<=quantity<=999:
+                raise ApiError("Количество должно быть целым числом от 1 до 999.")
+            identifier=item["id"]
+            selected[identifier]=selected.get(identifier,0)+quantity
+            if selected[identifier]>999:
+                raise ApiError("Количество одной позиции не должно превышать 999.")
+        result,missing=[],[]
+        total_base,total_sale=Decimal(0),Decimal(0)
+        with self.lock,self.connection() as db:
+            settings=self.meta(db,"settings")
+            for identifier,quantity in selected.items():
+                row=db.execute("SELECT * FROM products WHERE id=?",(identifier,)).fetchone()
+                product=self.serialize_product(db,row,settings) if row else None
+                valid=product is not None and product["base_price"] is not None and product["sale_price"] is not None
+                base_total=float(Decimal(str(product["base_price"]))*quantity) if valid else None
+                sale_total=float(Decimal(str(product["sale_price"]))*quantity) if valid else None
+                if valid:
+                    total_base+=Decimal(str(base_total));total_sale+=Decimal(str(sale_total))
+                else:
+                    missing.append(identifier)
+                result.append({"id":identifier,"quantity":quantity,"product":product,"base_total":base_total,"sale_total":sale_total})
+        return {"items":result,"total_base":float(total_base),"total_sale":float(total_sale),
+                "units":sum(selected.values()),"lines":len(selected),"complete":not missing,"missing":missing}
+
     def edit_product(self, product_id, fields):
         with self.lock, self.connection() as db:
             row = db.execute("SELECT * FROM products WHERE id=?", (product_id,)).fetchone()
@@ -343,6 +378,7 @@ class Catalog:
                        ",overrides=?,search_text=? WHERE id=?",
                        [current[k] for k in TEXT_FIELDS] + [compact(overrides), search, product_id])
             # Original identity remains an alias: manual corrections survive subsequent imports.
+            current["identity_context"] = json.loads(current["source_values"]).get("identity_context")
             new_key = product_key(current)
             existing = db.execute("SELECT product_id FROM aliases WHERE identity_key=?", (new_key,)).fetchone()
             if existing is None:
@@ -423,7 +459,11 @@ class Catalog:
                             if sheet["name"] in saved_sheets:
                                 old = saved_sheets[sheet["name"]]
                                 sheet["selected"] = old.get("selected", sheet.get("selected", True))
-                                sheet["mapping"].update(old.get("mapping", {}))
+                                if old.get("mapping",{}).get("name") and old.get("mapping",{}).get("price"):
+                                    sheet["mapping"].update(old["mapping"])
+                                for field in ("factory","component_parent"):
+                                    if field in old:
+                                        sheet[field] = old[field]
                         config["profile_used"] = True
                     configs.append(config)
                     file_paths[file_id] = {"path": str(path), "name": name}
@@ -454,7 +494,9 @@ class Catalog:
                 source = session["files"].get(config.get("file_id"))
                 if source is None:
                     raise ApiError("Файл не найден в текущем импорте.")
-                if not str(config.get("factory", "")).strip():
+                selected_sheets = [sheet for sheet in config.get("sheets",[]) if sheet.get("selected",True)]
+                if not str(config.get("factory", "")).strip() and not any(
+                        sheet.get("factory") or sheet.get("factory_groups") for sheet in selected_sheets):
                     issues.append({"name": source["name"], "status": "issue",
                                    "message": "Укажите фабрику для этого файла.", "source_file": source["name"]})
                     continue
@@ -472,6 +514,9 @@ class Catalog:
                     product["factory"] = str(product["factory"] or config["factory"]).strip()
                     for key in TEXT_FIELDS:
                         product[key] = str(product.get(key) or "").strip()
+                    if not product["factory"]:
+                        issues.append({**product,"status":"issue","message":"Укажите фабрику для этого листа."})
+                        continue
                     try:
                         price = float(product["base_price"])
                         if not math.isfinite(price) or price <= 0:
@@ -1263,6 +1308,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send_bytes(file.read_bytes(), mimetypes.guess_type(file.name)[0] or "application/octet-stream")
             if self.command == "POST":
                 payload = self.body()
+                if path == "/api/selection/quote":
+                    return self.send_json(self.catalog.quote_selection(payload))
                 if path == "/api/import/inspect":
                     return self.send_json(self.catalog.inspect(payload))
                 if path == "/api/import/preview":

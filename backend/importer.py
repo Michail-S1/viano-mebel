@@ -75,6 +75,10 @@ def product_key(product: dict) -> str:
               _identity(product.get("collection")), sku or _identity(product.get("name")),
               _identity(product.get("color")), _identity(product.get("dimensions")),
               _identity(product.get("variant"))]
+    if (product.get("identity_context") or {}).get("kind") == "1c-nomenclature":
+        # In this export the article can identify an entire furniture group.
+        # The explicit nomenclature distinguishes different models in that group.
+        fields.extend(["1c-nomenclature", _identity(product.get("name"))])
     return hashlib.sha256(json.dumps(fields, ensure_ascii=False).encode("utf-8")).hexdigest()
 
 
@@ -117,6 +121,7 @@ class Sheet:
     rows: dict[int, dict[int, Any]]
     merges: list[tuple[int, int, int, int]] = field(default_factory=list)
     _merge_rows: dict[int, dict[int, Any]] = field(default_factory=dict)
+    cell_indents: dict[tuple[int, int], int] = field(default_factory=dict)
 
     def __post_init__(self):
         # Only populated merged anchors are expanded. Empty/format-only merged
@@ -166,6 +171,12 @@ def _xlsx_read(path: Path) -> list[Sheet]:
         workbook = ET.fromstring(archive.read("xl/workbook.xml"))
         relationships = ET.fromstring(archive.read("xl/_rels/workbook.xml.rels"))
         targets = {item.attrib["Id"]: item.attrib["Target"] for item in relationships}
+        style_indents = []
+        if "xl/styles.xml" in archive.namelist():
+            styles = ET.fromstring(archive.read("xl/styles.xml")).find(NS + "cellXfs")
+            for style in styles if styles is not None else []:
+                alignment = style.find(NS + "alignment")
+                style_indents.append(int(alignment.get("indent", 0)) if alignment is not None else 0)
         count = 0
         for item in workbook.findall(NS + "sheets/" + NS + "sheet"):
             rel = item.attrib.get(REL_NS + "id")
@@ -176,6 +187,7 @@ def _xlsx_read(path: Path) -> list[Sheet]:
                 continue
             rows: dict[int, dict[int, Any]] = {}
             merges = []
+            cell_indents = {}
             with archive.open(xml_path) as stream:
                 for _, element in ET.iterparse(stream, events=("end",)):
                     if element.tag == NS + "c":
@@ -184,6 +196,10 @@ def _xlsx_read(path: Path) -> list[Sheet]:
                             element.clear()
                             continue
                         row, col = _coords(reference)
+                        style = int(element.get("s", 0))
+                        indent = style_indents[style] if style < len(style_indents) else 0
+                        if indent and col == 1 and len(cell_indents) < MAX_CELLS:
+                            cell_indents[(row, col)] = indent
                         kind = element.attrib.get("t", "")
                         value_element = element.find(NS + "v")
                         value = value_element.text if value_element is not None else None
@@ -214,7 +230,7 @@ def _xlsx_read(path: Path) -> list[Sheet]:
                         last_row, last_col = _coords(last or first)
                         merges.append((first_row, last_row, first_col, last_col))
                         element.clear()
-            sheets.append(Sheet(item.attrib["name"], rows, merges))
+            sheets.append(Sheet(item.attrib["name"], rows, merges, cell_indents=cell_indents))
     return sheets
 
 
@@ -275,7 +291,7 @@ def _factory(filename: str, sheets: list[Sheet]) -> str:
     text = filename.casefold().replace("ё", "е")
     if re.search(r"регион[\s_-]*058", text):
         return "Регион 058"
-    known = [("регина", "Регина"), ("стенд", "Стендмебель"), ("альбина", "Альбина"),
+    known = [("бтс", "БТС"), ("bts", "БТС"), ("регина", "Регина"), ("стенд", "Стендмебель"), ("альбина", "Альбина"),
              ("росток", "Росток"), ("эста", "ЭСТА Мебель"), ("аленушка", "Алёнушка"),
              ("дсв", "ДСВ"), ("миф", "МИФ"), ("пирамида", "Пирамида")]
     for marker, name in known:
@@ -325,6 +341,10 @@ def _price_score(label: str) -> int:
 
 
 def _header(sheet: Sheet) -> tuple[int, dict[str, str | None], list[dict]]:
+    from .stock_import import layout
+    warehouse = layout(sheet)
+    if warehouse:
+        return warehouse["header_row"], warehouse["mapping"], warehouse["headers"]
     mapping = dict.fromkeys(FIELDS)
     header_row = 0
     best = -1
@@ -480,6 +500,10 @@ def _service_name(name: str) -> bool:
 
 
 def _parse_sheet(sheet: Sheet, filename: str, factory: str, configuration: dict) -> tuple[list[dict], list[dict]]:
+    from .stock_import import layout, parse as parse_warehouse
+    warehouse = layout(sheet)
+    if warehouse:
+        return parse_warehouse(sheet, filename, factory, configuration, warehouse)
     header_row, default, headers = _header(sheet)
     user_mapping = configuration.get("mapping") or {}
     mapping = {**default, **{k: v for k, v in user_mapping.items() if k in FIELDS}}
@@ -523,6 +547,8 @@ def _parse_sheet(sheet: Sheet, filename: str, factory: str, configuration: dict)
     products, issues = [], []
     start_row = max(header_row + 1, int(configuration.get("start_row") or 1))
     last_named = None
+    configured_parent = normalize_text(configuration.get("component_parent"))
+    component_parent = configured_parent
     numbers = sheet.row_numbers
     for position, number in enumerate(numbers):
         if number < start_row:
@@ -555,6 +581,7 @@ def _parse_sheet(sheet: Sheet, filename: str, factory: str, configuration: dict)
                     if not re.search(r"цвет|фото|характерист|вес|объем|объём|ширин|высот|глубин|размер|габарит|артикул|наименование|название", label, re.I):
                         collection = _collection_name(label)
             last_named = None
+            component_parent = configured_parent
             continue
         heading = name or (candidates[0] if len(candidates) == 1 else "")
         category = re.sub(r"^\d+[.]\s*", "", heading).casefold().rstrip(".")
@@ -571,6 +598,11 @@ def _parse_sheet(sheet: Sheet, filename: str, factory: str, configuration: dict)
         collection_title = bool(re.search(r"коллекци|модульная (?:система|программа)|"
                                           r"гардеробная система", heading, re.I))
         upper_title = heading.isupper() and not re.search(r"\d", heading)
+        numeric_children = False
+        if price in (None,0) and heading and re.search(r"(?i)шкаф|кухн|гардероб|стеллаж|корпус|фасад|модул|комод|тумб",heading):
+            following = numbers[position+1:position+3]
+            numeric_children = any(re.fullmatch(r"\d+[.,]\d+",normalize_text(sheet.get(n,mapping["name"])))
+                                   and _price(sheet.get(n,mapping["price"])) is not None for n in following)
         # MIF uses indentation to distinguish a zero-price group from its
         # actual priced children. Only descend when the original file proves it.
         hierarchical_group = False
@@ -581,7 +613,7 @@ def _parse_sheet(sheet: Sheet, filename: str, factory: str, configuration: dict)
                 next_indent = len(next_name) - len(next_name.lstrip())
                 hierarchical_group = next_indent > indent
         if price in (None, 0) and heading and (
-                category in CATEGORY_NAMES or collection_title or hierarchical_group or sku_title or
+                category in CATEGORY_NAMES or collection_title or hierarchical_group or numeric_children or sku_title or
                 len(candidates) == 1 and direct_price in (None, "") and (
                     other_named_column or horizontal_heading or upper_title or
                     not color and not sku and not re.search(
@@ -593,12 +625,26 @@ def _parse_sheet(sheet: Sheet, filename: str, factory: str, configuration: dict)
                 if not (category in CATEGORY_NAMES and collection and
                         "untitled" in filename.casefold()):
                     collection = _collection_name(heading)
+                if category not in CATEGORY_NAMES and re.search(r"(?i)шкаф|кухн|гардероб|стеллаж|корпус|фасад|модул|комод|тумб", heading):
+                    component_parent = configured_parent or heading
+                else:
+                    component_parent = configured_parent
             last_named = None
             continue
         # A physical continuation of a merged item with dimensions has no own
         # name or price. It is not a second product with a missing price.
         if not original_name and name and last_named and name == last_named["name"] and raw_price in (None, ""):
             continue
+        name_context = None
+        if re.fullmatch(r"\d+[.,]\d+", name) and price is not None:
+            if component_parent:
+                original_label = name
+                name = component_parent + " — модуль " + name.replace(".", ",")
+                name_context = {"kind":"numeric-component","original_name":original_label,"parent_name":component_parent}
+            else:
+                issues.append({"name":name,"message":"В названии только размер или номер модуля. Укажите базовое название модулей для этого листа.",
+                               "source_file":filename,"source_sheet":sheet.name,"source_row":number})
+                continue
         if _service_name(name):
             # Explicit colour variants may continue a merged/non-merged name,
             # only when there is a real price and an identifying colour.
@@ -636,6 +682,8 @@ def _parse_sheet(sheet: Sheet, filename: str, factory: str, configuration: dict)
         if price is None or price <= 0:
             issues.append({"message": "Нет корректной исходной цены: " + name,
                            "source_file": filename, "source_sheet": sheet.name, "source_row": number})
+        if name_context:
+            product["name_context"] = name_context
         product = normalize_product(product, identity_context)
         products.append(product)
         last_named = {"name": name, "row": number, "color": color,
@@ -644,40 +692,47 @@ def _parse_sheet(sheet: Sheet, filename: str, factory: str, configuration: dict)
 
 
 def inspect_file(path: str, file_id: str) -> dict:
+    from .stock_import import layout, factory_label
     sheets = _read(path)
     filename = Path(path).name
     factory = _factory(filename, sheets)
-    result = {"file_id": file_id, "name": filename, "factory": factory,
-              "sheets": [], "warnings": []}
-    if not factory:
-        result["warnings"].append("Фабрика не определена. Укажите её перед импортом.")
+    warehouse_info = {sheet.name:layout(sheet) for sheet in sheets}
+    warehouse_factories = {f for info in warehouse_info.values() if info for f in info["factories"]}
+    if len(warehouse_factories)>1:
+        factory = ""
+    result = {"file_id":file_id,"name":filename,"factory":factory,"sheets":[],"warnings":[]}
+    previous_factory = factory
     for sheet in sheets:
-        header_row, mapping, headers = _header(sheet)
-        selected = not bool(NONPRODUCT_SHEETS.search(sheet.name)) and bool(
-            mapping.get("name") and mapping.get("price"))
-        products, _ = _parse_sheet(sheet, filename, factory, {"mapping": mapping}) if selected else ([], [])
-        sample = []
-        if products:
-            for product in products[:5]:
-                number = product["source_row"]
-                sample.append({_col(col): normalize_text(value)
-                               for col, value in sheet.rows.get(number, {}).items()})
-        else:
-            for number in sheet.row_numbers:
-                if number <= header_row:
-                    continue
-                sample.append({_col(col): normalize_text(value) for col, value in sheet.rows[number].items()})
-                if len(sample) == 3:
-                    break
-        item = {"name": sheet.name, "selected": selected, "mapping": mapping,
-                "headers": headers, "sample_rows": sample, "count": len(products)}
+        info = warehouse_info[sheet.name]
+        sheet_factory = info["factory"] if info else factory_label(sheet.name, known_only=True)
+        if not sheet_factory and not info and previous_factory and re.match(r"^(?:лист\d*|дополн\w*|продолж\w*|фасады|корпус|кухни)(?:\b|\d)",sheet.name,re.I):
+            sheet_factory = previous_factory
         if factory == "SV-Мебель" and "nn" in sheet.name.casefold():
-            item["factory"] = "NN-Мебель"
+            sheet_factory = "NN-Мебель"
+        if sheet_factory:
+            previous_factory = sheet_factory
+        header_row,mapping,headers = _header(sheet)
+        selected = not bool(NONPRODUCT_SHEETS.search(sheet.name)) and bool(mapping.get("name") and mapping.get("price"))
+        products,issues = _parse_sheet(sheet,filename,factory,{"mapping":mapping,"factory":sheet_factory}) if selected else ([],[])
+        sample=[]
+        for n in ([p["source_row"] for p in products[:5]] if products else [n for n in sheet.row_numbers if n>header_row][:3]):
+            sample.append({_col(col):normalize_text(value) for col,value in sheet.rows.get(n,{}).items()})
+        item={"name":sheet.name,"selected":selected,"mapping":mapping,"headers":headers,"sample_rows":sample,
+              "count":len(products),"factory":sheet_factory,"issues_count":len(issues)}
+        if info:
+            item["format"]=info.get("kind","warehouse")
+            item["note"]=("Многострочный заголовок 1С: номенклатура, артикул и цена распознаны. Повторяющиеся служебные строки пропускаются; остаток не загружается."
+                          if info.get("kind")=="price-export" else "Номенклатура и характеристики объединяются в товар. Цена — за единицу; остаток и сумма запасов не загружаются.")
+            item["factory_groups"]=info["factories"]
         result["sheets"].append(item)
-        available_prices = [h for h in headers if _price_score(h["label"]) >= 0]
-        if selected and len(available_prices) > 1:
-            result["warnings"].append(
-                f'Лист «{sheet.name}»: несколько цен. Проверьте выбранный столбец {mapping["price"]}.')
+        available_prices=[h for h in headers if _price_score(h["label"])>=0]
+        if selected and len(available_prices)>1:
+            result["warnings"].append(f'Лист «{sheet.name}»: несколько цен. Проверьте выбранный столбец {mapping["price"]}.')
+    if not factory and not all(s.get("factory") or s.get("factory_groups") for s in result["sheets"] if s["selected"]):
+        result["warnings"].append("Укажите фабрику для файла либо отдельно для каждого выбранного листа.")
+    if len(warehouse_factories)>1:
+        result["warnings"].append("В книге несколько фабрик. Проверьте фабрику каждого листа; листы одной фабрики можно объединить одним названием.")
+    result["sheet_count"]=len(sheets)
     return result
 
 
@@ -685,12 +740,17 @@ def parse_file(path: str, config: dict) -> dict:
     sheets = _read(path)
     filename = normalize_text(config.get("source_file")) or Path(path).name
     default_factory = _factory(filename, sheets)
+    from .stock_import import layout
+    factories = {f for sheet in sheets for info in [layout(sheet)] if info for f in info["factories"]}
+    if len(factories)>1:
+        default_factory = ""
     factory = normalize_text(config.get("factory")) or default_factory
     by_name = {item.get("name"): item for item in config.get("sheets", [])}
     explicit = "sheets" in config
     products, issues, warnings = [], [], []
-    if not factory:
-        warnings.append("Фабрика не указана. Заполните её перед сохранением каталога.")
+    if not factory and not all(item.get("factory") or layout(sheet) for sheet in sheets
+                               for item in [by_name.get(sheet.name,{})] if item.get("selected",True)):
+        warnings.append("Фабрика не указана. Заполните её для файла или выбранных листов.")
     for sheet in sheets:
         configuration = by_name.get(sheet.name)
         if configuration is None:

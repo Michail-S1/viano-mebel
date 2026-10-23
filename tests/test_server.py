@@ -155,6 +155,41 @@ class CatalogAPI(unittest.TestCase):
             "files": [{"name": name, "content": base64.b64encode(PNG).decode("ascii")}],
         })
 
+    def test_selection_quote_quantities_and_fresh_prices_without_database_changes(self):
+        self.commit([["A1","Тумба Лира","Лира","","",1000],["B1","Шкаф Лира","Лира","","",2000]])
+        products={p['sku']:p for p in self.products()}
+        payload={"items":[{"id":products['A1']['id'],"quantity":2},{"id":products['B1']['id'],"quantity":3}]}
+        before=self.request("GET","/api/state")
+        quote=self.request("POST","/api/selection/quote",payload)
+        self.assertEqual((quote['total_base'],quote['total_sale'],quote['units'],quote['lines']),(8000,14600,5,2))
+        self.assertTrue(quote['complete']);self.assertEqual(quote['missing'],[])
+        self.assertEqual(before['revision'],self.request("GET","/api/state")['revision'])
+        self.request("POST","/api/settings",{"markup_percent":25,"fixed_add":500,"rounding":"none"})
+        updated=self.request("POST","/api/selection/quote",payload)
+        self.assertEqual(updated['total_sale'],12500)
+        self.assertEqual([p['base_price'] for p in self.products()], [1000,2000])
+
+    def test_selection_quote_missing_items_and_duplicate_quantities(self):
+        self.commit([["A1","Тумба","Лира","","",1000]])
+        identifier=self.products()[0]['id']
+        quote=self.request("POST","/api/selection/quote",{"items":[{"id":identifier,"quantity":1},
+            {"id":identifier,"quantity":2},{"id":"missing-product","quantity":2}]})
+        self.assertFalse(quote['complete']);self.assertEqual(quote['missing'],['missing-product'])
+        self.assertEqual((quote['total_sale'],quote['units'],quote['lines']),(6600,5,2))
+        self.assertIsNone(quote['items'][1]['sale_total'])
+        empty=self.request("POST","/api/selection/quote",{"items":[]})
+        self.assertEqual((empty['total_sale'],empty['units'],empty['lines']),(0,0,0))
+        self.assertTrue(empty['complete'])
+
+    def test_selection_quote_rejects_invalid_quantities(self):
+        for quantity in [0,-1,1.5,True,"2",1000,None]:
+            with self.subTest(quantity=quantity):
+                self.expect_http_error("POST","/api/selection/quote",{"items":[{"id":"item","quantity":quantity}]})
+        for payload in [{},{"items":{}},{"items":[None]},{"items":[{"id":"","quantity":1}]},
+                        {"items":[{"id":"item","quantity":600},{"id":"item","quantity":600}]},
+                        {"items":[{"id":str(n),"quantity":1} for n in range(501)]}]:
+            self.expect_http_error("POST","/api/selection/quote",payload)
+
     def test_second_listener_cannot_take_over_a_running_catalog(self):
         second_data=self.root/"second-data"
         result=subprocess.run([sys.executable,"-X","utf8",str(ROOT/"server.py"),

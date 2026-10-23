@@ -56,7 +56,7 @@ def build_release(root, output, url=None):
         temporary.unlink(missing_ok=True)
     manifest = {"app": APP, "version": version, "url": url or target.name,
                 "sha256": hashlib.sha256(target.read_bytes()).hexdigest(),
-                "notes": "Короткие обозначения из 1–3 букв (КР, КП, ШК и другие) ищутся по целому слову без учёта регистра. Исправлены поиск в каталоге и ручной поиск в разделе Авито; длинные запросы сохраняют поиск по части слова."}
+                "notes": "Импорт всех листов многофабричных книг и выгрузок остатков, автоматические столбцы и фабрика БТС для многострочных заголовков 1С. Новая панель «Подборка комплекта»: количества, удаление, очистка с отменой и текущие итоги. Числовые названия модулей получают контекст или выводятся на проверку."}
     (output / "latest.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
     return target
 
