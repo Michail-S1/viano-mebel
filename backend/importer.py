@@ -718,6 +718,7 @@ def inspect_file(path: str, file_id: str) -> dict:
         for n in ([p["source_row"] for p in products[:5]] if products else [n for n in sheet.row_numbers if n>header_row][:3]):
             sample.append({_col(col):normalize_text(value) for col,value in sheet.rows.get(n,{}).items()})
         item={"name":sheet.name,"selected":selected,"mapping":mapping,"headers":headers,"sample_rows":sample,
+              "detected_factory":sheet_factory,
               "count":len(products),"factory":sheet_factory,"issues_count":len(issues)}
         if info:
             item["format"]=info.get("kind","warehouse")
@@ -732,6 +733,7 @@ def inspect_file(path: str, file_id: str) -> dict:
         result["warnings"].append("Укажите фабрику для файла либо отдельно для каждого выбранного листа.")
     if len(warehouse_factories)>1:
         result["warnings"].append("В книге несколько фабрик. Проверьте фабрику каждого листа; листы одной фабрики можно объединить одним названием.")
+    result["detected_factory"]=factory
     result["sheet_count"]=len(sheets)
     return result
 

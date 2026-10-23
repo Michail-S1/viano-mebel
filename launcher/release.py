@@ -56,7 +56,7 @@ def build_release(root, output, url=None):
         temporary.unlink(missing_ok=True)
     manifest = {"app": APP, "version": version, "url": url or target.name,
                 "sha256": hashlib.sha256(target.read_bytes()).hexdigest(),
-                "notes": "Импорт всех листов многофабричных книг и выгрузок остатков, автоматические столбцы и фабрика БТС для многострочных заголовков 1С. Новая панель «Подборка комплекта»: количества, удаление, очистка с отменой и текущие итоги. Числовые названия модулей получают контекст или выводятся на проверку."}
+                "notes": "Явное автоопределение нескольких фабрик в одном Excel-файле. Найденные фабрики видны до импорта и в предпросмотре; общее название не требуется. Кнопка восстановления автоопределения и фабрика в заголовке каждого листа."}
     (output / "latest.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
     return target
 

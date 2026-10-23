@@ -302,6 +302,16 @@ class CatalogAPI(unittest.TestCase):
         self.expect_http_error("POST", "/api/import/commit", {"session_id": stale_session}, statuses=(409,))
         self.assertEqual(len(self.products()), 1)
 
+    def test_html_uses_current_version_for_browser_assets(self):
+        from server import VERSION
+        root=self.request('GET','/',raw=True).decode('utf-8')
+        self.assertNotIn('__APP_VERSION__',root)
+        for asset in ('app.js','kit.js','avito.js','styles.css','kit.css'):
+            self.assertIn('/static/'+asset+'?v='+VERSION,root)
+        with urllib.request.urlopen(self.base+'/static/app.js?v='+VERSION) as response:
+            self.assertEqual(response.headers['Cache-Control'],'no-store')
+            self.assertIn(b'importFactorySummary',response.read())
+
     def test_static_styles_and_root_are_served(self):
         page = self.request("GET", "/", raw=True)
         self.assertIn(b'lang="ru"', page)

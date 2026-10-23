@@ -195,14 +195,36 @@ function mappingOptions(sheet, key) {
   if(current && !heads.some(h=>h.column===current))html+='<option value="' + esc(current) + '" selected>' + 'Составное поле (' + esc(current) + ')</option>';
   return html + heads.map(h=>'<option value="' + esc(h.column) + '" ' + (current===h.column?'selected':'') + '>' + esc(columnLabel(h)) + '</option>').join('');
 }
+function importFactorySummary(file) {
+  const factories=new Set();let unresolved=0;
+  (file.sheets || []).filter(s=>s.selected).forEach(sheet=>{
+    const explicit=String(sheet.factory || file.factory || '').trim();
+    if(explicit)factories.add(explicit);
+    else if(sheet.factory_groups?.length)sheet.factory_groups.forEach(f=>factories.add(f));
+    else unresolved++;
+  });
+  return {factories:[...factories],unresolved};
+}
+function importFactoriesHtml(file) {
+  const {factories,unresolved}=importFactorySummary(file);
+  return '<strong>' + (factories.length>1?'Несколько фабрик — автоопределение':factories.length?'Фабрика определена':'Определение фабрик') + '</strong><p>' +
+    (factories.length?'Фабрик к загрузке: ' + factories.length + '. Товары распределятся по своим фабрикам.':'Фабрика пока не определена.') +
+    (unresolved?' Укажите фабрику для ' + unresolved + ' нераспознанных листов.':' Общее название для файла не требуется.') + '</p>' +
+    '<div class="import-factory-tags">' + factories.map(f=>'<span>' + esc(f) + '</span>').join('') + '</div>';
+}
+function refreshImportFactories(fi) {
+  const file=collectMappings()[Number(fi)];if(!file)return;
+  const box=document.querySelector('[data-import-factories="'+fi+'"]');if(box)box.innerHTML=importFactoriesHtml(file);
+  file.sheets.forEach((sheet,si)=>{const badge=document.querySelector('[data-sheet-factory-label][data-fi="'+fi+'"][data-si="'+si+'"]');if(badge)badge.textContent=sheet.factory || file.factory || sheet.factory_groups?.join(', ') || 'Фабрика не определена';});
+}
 function renderImportMapping() {
   const labels={name:'Наименование *',price:'Исходная цена *',sku:'Артикул',color:'Цвет',dimensions:'Размеры целиком',collection:'Коллекция',width:'Ширина',height:'Высота',depth:'Глубина'};
-  let html='<p class="body-description">Проверьте фабрику и отметьте листы с товарами. Нажмите название листа, чтобы открыть его настройки.</p><div class="notice" style="margin-top:-8px">Выберите столбцы с наименованием и исходной ценой. Буква в скобках соответствует столбцу Excel. Остальные поля можно не использовать.<br>Встроенные фотографии добавятся автоматически; если их нет, загрузите через карточку товара.</div><datalist id="factorySuggestions">' + [...new Set([...(ui.state?.factories || []).map(f=>f.name),...imp.inspect.files.map(f=>f.factory)].filter(Boolean))].map(f=>'<option value="' + esc(f) + '">').join('') + '</datalist>';
+  let html='<p class="body-description">Фабрики определяются отдельно для каждого листа и групп Excel. Отметьте листы с товарами. Нажмите название листа, чтобы открыть его настройки.</p><div class="notice" style="margin-top:-8px">Выберите столбцы с наименованием и исходной ценой. Буква в скобках соответствует столбцу Excel. Остальные поля можно не использовать.<br>Встроенные фотографии добавятся автоматически; если их нет, загрузите через карточку товара.</div><datalist id="factorySuggestions">' + [...new Set([...(ui.state?.factories || []).map(f=>f.name),...imp.inspect.files.map(f=>f.factory)].filter(Boolean))].map(f=>'<option value="' + esc(f) + '">').join('') + '</datalist>';
   imp.inspect.files.forEach((file,fi)=>{
-    html+='<section class="file-profile"><div class="file-profile-heading">' + icon('file') + '<span>' + esc(file.name) + '</span>' + (file.profile_used?'<span class="status-tag">Профиль найден</span>':'') + '</div><label class="field file-factory">Фабрика по умолчанию (если листы одной фабрики)<input data-file-factory="' + fi + '" value="' + esc(file.factory) + '" list="factorySuggestions" placeholder="Можно оставить пустым, если фабрики указаны у листов"></label>' + warningsHtml(file.warnings) + '<div class="sheet-bulk-tools"><strong data-sheet-tally="' + fi + '">Выбрано ' + file.sheets.filter(x=>x.selected).length + ' из ' + file.sheets.length + ' листов</strong><button type="button" class="text-button" data-sheets-all="' + fi + '" data-selection="all">Выбрать все</button><button type="button" class="text-button" data-sheets-all="' + fi + '" data-selection="none">Снять выбор</button></div>';
+    html+='<section class="file-profile"><div class="file-profile-heading">' + icon('file') + '<span>' + esc(file.name) + '</span>' + (file.profile_used?'<span class="status-tag">Профиль найден</span>':'') + '</div><div class="import-factories" data-import-factories="' + fi + '">' + importFactoriesHtml(file) + '</div><button type="button" class="text-button factory-auto-button" data-factories-auto="' + fi + '">Восстановить автоопределение</button><details class="factory-fallback"><summary>Указать фабрику для нераспознанных листов</summary><label class="field file-factory">Фабрика по умолчанию<input data-file-factory="' + fi + '" value="' + esc(file.factory) + '" list="factorySuggestions" placeholder="Необязательно: только для листов без фабрики"></label></details>' + warningsHtml(file.warnings) + '<div class="sheet-bulk-tools"><strong data-sheet-tally="' + fi + '">Выбрано ' + file.sheets.filter(x=>x.selected).length + ' из ' + file.sheets.length + ' листов</strong><button type="button" class="text-button" data-sheets-all="' + fi + '" data-selection="all">Выбрать все</button><button type="button" class="text-button" data-sheets-all="' + fi + '" data-selection="none">Снять выбор</button></div>';
     file.sheets.forEach((sheet,si)=>{
       const headers=sheet.headers || [];
-      html+='<details class="sheet-card" ' + (sheet.selected && si===file.sheets.findIndex(x=>x.selected)?'open':'') + '><summary><input type="checkbox" aria-label="Загрузить лист ' + esc(sheet.name) + '" data-sheet-selected data-fi="' + fi + '" data-si="' + si + '" ' + (sheet.selected?'checked':'') + '><span class="sheet-title">' + esc(sheet.name) + '</span><small>' + number(sheet.count) + ' позиций</small>' + icon('chevron') + '</summary><div class="sheet-body">' +
+      html+='<details class="sheet-card" ' + (sheet.selected && si===file.sheets.findIndex(x=>x.selected)?'open':'') + '><summary><input type="checkbox" aria-label="Загрузить лист ' + esc(sheet.name) + '" data-sheet-selected data-fi="' + fi + '" data-si="' + si + '" ' + (sheet.selected?'checked':'') + '><span class="sheet-title">' + esc(sheet.name) + '<span class="sheet-factory-label" data-sheet-factory-label data-fi="' + fi + '" data-si="' + si + '">' + esc(sheet.factory || file.factory || sheet.factory_groups?.join(', ') || 'Фабрика не определена') + '</span></span><small>' + number(sheet.count) + ' позиций</small>' + icon('chevron') + '</summary><div class="sheet-body">' +
         '<div class="sheet-factory-row"><label class="field file-factory">Фабрика этого листа<input data-sheet-factory data-fi="' + fi + '" data-si="' + si + '" value="' + esc(sheet.factory || '') + '" list="factorySuggestions" placeholder="' + esc(file.factory || 'Укажите фабрику') + '"><small>Пусто — фабрика по умолчанию' + (sheet.factory_groups?.length?' или из групп Excel':'') + '.</small></label>' + (si?'<button type="button" class="button secondary small" data-factory-previous data-fi="' + fi + '" data-si="' + si + '">Как у предыдущего листа</button>':'') + '</div>' + (sheet.note?'<p class="notice sheet-format-note">' + esc(sheet.note) + '</p>':'') +
         '<details class="component-parent-setting"><summary>Если в названии только 0,4 / 0,5 и т. п.</summary><label class="field">Базовое название модулей<input data-component-parent data-fi="' + fi + '" data-si="' + si + '" value="' + esc(sheet.component_parent || '') + '" placeholder="Например, Шкаф АВИС (корпус)"></label><p class="muted small-text">Из родительского заголовка название берётся автоматически. Это поле поможет, если в файле его нет. Единицы размеров не угадываются.</p></details>' +
         '<div class="mapping-grid">' + Object.entries(labels).map(([key,label])=>'<label class="field">' + label + '<select data-mapping="' + key + '" data-fi="' + fi + '" data-si="' + si + '">' + mappingOptions(sheet,key) + '</select></label>').join('') + '</div>';
@@ -231,6 +253,7 @@ function renderImportPreview() {
   const statuses={all:'Все позиции',new:'Новые',updated:'Обновления',duplicate:'Дубли',issue:'Замечания'};
   let html='<div class="preview-counts">' + [['new','Новых товаров'],['updated','Обновлений'],['duplicates','Дублей пропущено'],['issues','На проверку']].map(([key,title])=>'<div class="preview-count ' + (key==='issues'?'issue':'') + '"><strong>' + number(c[key]) + '</strong><span>' + title + '</span></div>').join('') + '</div>';
   if(p.photos?.new>0)html+='<div class="notice photo-import-notice">' + icon('camera') + '<span>Будет добавлено ' + number(p.photos.new) + ' фото к ' + number(p.photos.products) + ' позициям</span></div>';
+  if(p.factories?.length)html+='<div class="import-factories"><strong>Товары распределены по ' + p.factories.length + ' фабрикам</strong><div class="import-factory-tags">' + p.factories.map(f=>'<span>' + esc(f.name) + ' · ' + number(f.count) + '</span>').join('') + '</div></div>';
   html+=warningsHtml(p.warnings);
   if(c.issues)html+='<div class="notice">Позиции с замечаниями не будут загружены. Проверьте исходные строки и выбор столбцов; остальные товары можно сохранить.<br><a class="text-button" href="/api/import/report/' + esc(p.session_id) + '" download>' + icon('file','small') + 'Скачать список проблем (CSV)</a></div>';
   if(!c.new && !c.updated && !c.duplicates && !c.issues)html+='<div class="notice">Товары не найдены. Вернитесь к выбору столбцов и проверьте наименование, цену и выбранные листы.</div>';
@@ -320,7 +343,9 @@ function openNamed(name) {
 document.addEventListener('click',event=>{
   const target=event.target instanceof Element ? event.target : null;if(!target)return;
   const allSheets=target.closest('[data-sheets-all]');
-  if(allSheets){const fi=allSheets.dataset.sheetsAll;document.querySelectorAll('[data-sheet-selected][data-fi="'+fi+'"]').forEach(el=>el.checked=allSheets.dataset.selection==='all');updateSheetTally(fi);return;}
+  if(allSheets){const fi=allSheets.dataset.sheetsAll;document.querySelectorAll('[data-sheet-selected][data-fi="'+fi+'"]').forEach(el=>el.checked=allSheets.dataset.selection==='all');updateSheetTally(fi);refreshImportFactories(fi);return;}
+  const autoFactories=target.closest('[data-factories-auto]');
+  if(autoFactories){const fi=Number(autoFactories.dataset.factoriesAuto),files=collectMappings(),file=files[fi];file.factory=file.detected_factory || '';file.sheets.forEach(sheet=>sheet.factory=sheet.detected_factory || '');imp.inspect.files=files;showError('importError',null);renderImportMapping();return;}
   const previousFactory=target.closest('[data-factory-previous]');
   if(previousFactory){const fi=Number(previousFactory.dataset.fi),si=Number(previousFactory.dataset.si),files=collectMappings();files[fi].sheets[si].factory=files[fi].sheets[si-1].factory || files[fi].factory;imp.inspect.files=files;renderImportMapping();return;}
   const close=target.closest('[data-close]');if(close){closeDialog(close.closest('dialog'));return;}
@@ -431,4 +456,5 @@ bootstrap();
 setInterval(async()=>{if(!ui.state || document.querySelector('dialog[open]'))return;try{const previous=ui.state.revision;const previousImport=ui.state.stats.last_import;ui.state=await api('/api/state');renderState();if((previous!==undefined && previous!==ui.state.revision) || previousImport!==ui.state.stats.last_import)await loadProducts();}catch(e){}},20000);
 
 function updateSheetTally(fi){const boxes=[...document.querySelectorAll('[data-sheet-selected][data-fi="'+fi+'"]')];const label=document.querySelector('[data-sheet-tally="'+fi+'"]');if(label)label.textContent='Выбрано '+boxes.filter(el=>el.checked).length+' из '+boxes.length+' листов';}
-document.addEventListener('change',e=>{if(e.target.matches('[data-sheet-selected]'))updateSheetTally(e.target.dataset.fi);});
+document.addEventListener('change',e=>{if(e.target.matches('[data-sheet-selected]')){updateSheetTally(e.target.dataset.fi);refreshImportFactories(e.target.dataset.fi);}});
+document.addEventListener('input',e=>{if(e.target.matches('[data-sheet-factory]'))refreshImportFactories(e.target.dataset.fi);if(e.target.matches('[data-file-factory]'))refreshImportFactories(e.target.dataset.fileFactory);});

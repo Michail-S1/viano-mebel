@@ -42,7 +42,7 @@ try:
 except ImportError:
     Image = ImageOps = None
 
-VERSION = "1.4.0"
+VERSION = "1.4.1"
 TEXT_FIELDS = ("name", "factory", "collection", "sku", "color", "dimensions", "variant")
 SOURCE_FIELDS = TEXT_FIELDS + ("base_price", "source_file", "source_sheet", "source_row", "identity_context", "name_context")
 DEFAULTS = {"markup_percent": 20, "fixed_add": 1000, "rounding": "ruble"}
@@ -646,6 +646,8 @@ class Catalog:
                                 "photo_assets": photo_assets, "photos_count": photo_count})
             return {"session_id": session_id, "mode": mode, "counts": counts,
                     "items": self.preview_sample(result_items), "warnings": warnings,
+                    "factories": [{"name":name,"count":count} for name,count in sorted(collections.Counter(
+                        p["factory"] for p in result_items if p.get("factory") and p["status"] != "issue").items())],
                     "total_rows": len(result_items), "preview_limit": 300,
                     "photos": {"new": photo_count, "products": photo_products}}
 
@@ -1305,7 +1307,10 @@ class Handler(BaseHTTPRequestHandler):
                         raise ApiError("Файл не найден.", 404)
                 if not file.is_file():
                     raise ApiError("Страница не найдена.", 404)
-                return self.send_bytes(file.read_bytes(), mimetypes.guess_type(file.name)[0] or "application/octet-stream")
+                content = file.read_bytes()
+                if file == (ROOT / "static" / "index.html").resolve():
+                    content = content.replace(b"__APP_VERSION__", VERSION.encode("ascii"))
+                return self.send_bytes(content, mimetypes.guess_type(file.name)[0] or "application/octet-stream")
             if self.command == "POST":
                 payload = self.body()
                 if path == "/api/selection/quote":

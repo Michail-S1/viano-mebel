@@ -103,6 +103,43 @@ class WorkbookImport(unittest.TestCase):
             self.assertEqual(profile_family(self.path.name),profile_family(another.name))
         finally:cat.stop_event.set()
 
+    def test_empty_file_factory_imports_all_detected_factories_and_repeats_without_copies(self):
+        warehouse(self.path, {'Регина':stock_rows(), 'Стендмебель':stock_rows('СТЕНДМЕБЕЛЬ')})
+        cat=Catalog(self.root/'multi-db')
+        try:
+            inspected=cat.inspect({'paths':[str(self.path)]});files=inspected['files']
+            self.assertEqual(files[0]['factory'],'')
+            self.assertEqual(files[0]['detected_factory'],'')
+            self.assertEqual([s['detected_factory'] for s in files[0]['sheets']],['Регина','Стендмебель'])
+            preview=cat.preview({'session_id':inspected['session_id'],'files':files,'mode':'add'})
+            self.assertEqual(preview['counts']['new'],6)
+            self.assertEqual(preview['factories'],[{'name':'Регина','count':3},{'name':'Стендмебель','count':3}])
+            self.assertEqual(preview['counts']['issues'],2)  # Two source rows have no price.
+            self.assertEqual(cat.commit(inspected['session_id'])['added'],6)
+            again=cat.inspect({'paths':[str(self.path)]})
+            repeat=cat.preview({'session_id':again['session_id'],'files':again['files'],'mode':'update'})
+            self.assertEqual(repeat['counts']['new'],0)
+            self.assertEqual(repeat['counts']['duplicates'],6)
+            self.assertEqual(repeat['factories'],preview['factories'])
+        finally:cat.stop_event.set()
+
+    def test_auto_factory_metadata_survives_manual_profile_and_can_be_restored(self):
+        warehouse(self.path, {'Регина':stock_rows(), 'Стендмебель':stock_rows('СТЕНДМЕБЕЛЬ')})
+        cat=Catalog(self.root/'auto-db')
+        try:
+            inspected=cat.inspect({'paths':[str(self.path)]});files=inspected['files']
+            files[0]['sheets'][1]['factory']='Ручная фабрика'
+            cat.preview({'session_id':inspected['session_id'],'files':files,'mode':'add'})
+            cat.commit(inspected['session_id'])
+            again=cat.inspect({'paths':[str(self.path)]});config=again['files'][0]
+            self.assertEqual(config['sheets'][1]['factory'],'Ручная фабрика')
+            self.assertEqual(config['sheets'][1]['detected_factory'],'Стендмебель')
+            config['factory']=config['detected_factory']
+            for sheet in config['sheets']:sheet['factory']=sheet['detected_factory']
+            preview=cat.preview({'session_id':again['session_id'],'files':[config],'mode':'add'})
+            self.assertEqual({f['name'] for f in preview['factories']},{'Регина','Стендмебель'})
+        finally:cat.stop_event.set()
+
     def test_numeric_names_use_proven_parent_or_require_review(self):
         rows=[{'A':'Наименование','B':'Цена'},{'A':'Шкаф АВИС (корпус)'},
               {'A':'0,4','B':1000},{'A':'0,5','B':1200}, {'A':'Спальни'}, {'A':'0,6','B':1400}]
