@@ -154,15 +154,24 @@ def repair_plan(db):
         safe.append({"key": key, "keeper": keeper, "duplicates": products[1:],
                      "source": source["normalized_source"], "imported_at": source["imported_at"],
                      "overrides": overrides})
-    return {"groups": safe, "review": review}
+    from .source_identity import repair_groups
+    excluded={p['id'] for g in safe for p in [g['keeper']]+g['duplicates']}
+    cross=repair_groups(db,excluded)
+    return {"groups": safe+cross['groups'], "review": review+cross['review']}
 
 def apply_plan(catalog, db, plan):
     from .importer import product_key
     fields = ("name", "factory", "collection", "sku", "color", "dimensions", "variant")
     tables = {r[0] for r in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
     removed, remapped, moved_photos = 0, {}, 0
+    from .source_identity import remember, history
     for group in plan["groups"]:
         keeper = group["keeper"]["id"]
+        if group.get("original_sources"):
+            originals=list(group["original_sources"])
+            for duplicate in group["duplicates"]:
+                originals.extend(history(db,duplicate["id"]))
+            remember(catalog,db,keeper,originals)
         primary = db.execute("SELECT id FROM photos WHERE product_id=? AND is_primary=1", (keeper,)).fetchone()
         hashes = {}
         for photo in db.execute("SELECT id,filename FROM photos WHERE product_id=?", (keeper,)):
@@ -211,6 +220,16 @@ def apply_plan(catalog, db, plan):
             if existing and existing[0] != keeper:
                 raise ValueError("Противоречивое совпадение ключей: исправление отменено.")
             db.execute("INSERT OR IGNORE INTO aliases VALUES (?,?)", (key, keeper))
+    redirects=catalog.meta(db,"product_redirects") or {}
+    redirects.update((catalog.meta(db,"catalog_identity_repair") or {}).get("redirects",{}))
+    redirects.update(remapped)
+    if redirects:
+        for identifier in list(redirects):
+            seen={identifier};target=redirects[identifier]
+            while target in redirects and target not in seen:
+                seen.add(target);target=redirects[target]
+            redirects[identifier]=target
+        catalog.set_meta(db,"product_redirects",redirects)
     if removed:
         catalog.bump(db)
     return {"removed": removed, "groups": len(plan["groups"]), "moved_photos": moved_photos,

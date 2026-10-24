@@ -35,6 +35,7 @@ from backend.catalog_identity import semantic_key, semantic_index, original_key,
 from backend.images import product_pictures, MAX_IMAGE as MAX_EXCEL_IMAGE_BYTES
 from backend.dimensions import make_matcher
 from backend.search import is_short_word, whole_word_matches
+from backend.source_identity import SourceIndex, enriched, remember, history
 from backend.avito import Avito
 from launcher import update as updater
 try:
@@ -42,7 +43,7 @@ try:
 except ImportError:
     Image = ImageOps = None
 
-VERSION = "1.4.2"
+VERSION = "1.4.3"
 TEXT_FIELDS = ("name", "factory", "collection", "sku", "color", "dimensions", "variant")
 SOURCE_FIELDS = TEXT_FIELDS + ("base_price", "source_file", "source_sheet", "source_row", "identity_context", "name_context")
 DEFAULTS = {"markup_percent": 20, "fixed_add": 1000, "rounding": "ruble"}
@@ -164,7 +165,7 @@ class Catalog:
         """Repair only proven supplier equivalences, after a complete recoverable backup."""
         with self.lock:
             with self.connection() as db:
-                if self.meta(db, "catalog_identity_version") == 1 and not force:
+                if (self.meta(db, "catalog_identity_version") or 0) >= 2 and not force:
                     return self.meta(db, "catalog_identity_repair") or {"removed": 0}
                 revision = self.meta(db, "revision")
                 plan = repair_plan(db)
@@ -182,7 +183,7 @@ class Catalog:
                     raise ApiError("Каталог изменился во время проверки повторов. Перезапустите программу.", 409)
                 result = apply_plan(self, db, plan)
                 result.update({"backup": str(backup) if backup else None, "created_at": now()})
-                self.set_meta(db, "catalog_identity_version", 1)
+                self.set_meta(db, "catalog_identity_version", 2)
                 self.set_meta(db, "catalog_identity_repair", result)
             return result
 
@@ -229,8 +230,16 @@ class Catalog:
         result["photo_url"] = result["photos"][0]["url"] if result["photos"] else None
         return result
 
+    def resolve_product_id(self, db, identifier, redirects=None):
+        if redirects is None:redirects=self.meta(db,"product_redirects") or {}
+        seen=set()
+        while identifier in redirects and identifier not in seen:
+            seen.add(identifier);identifier=redirects[identifier]
+        return identifier
+
     def product(self, product_id):
         with self.lock, self.connection() as db:
+            product_id=self.resolve_product_id(db,product_id)
             row = db.execute("SELECT * FROM products WHERE id=?", (product_id,)).fetchone()
             if row is None:
                 raise ApiError("Товар не найден.", 404)
@@ -351,8 +360,9 @@ class Catalog:
         total_base,total_sale=Decimal(0),Decimal(0)
         with self.lock,self.connection() as db:
             settings=self.meta(db,"settings")
+            redirects=self.meta(db,"product_redirects") or {}
             for identifier,quantity in selected.items():
-                row=db.execute("SELECT * FROM products WHERE id=?",(identifier,)).fetchone()
+                row=db.execute("SELECT * FROM products WHERE id=?",(self.resolve_product_id(db,identifier,redirects),)).fetchone()
                 product=self.serialize_product(db,row,settings) if row else None
                 valid=product is not None and product["base_price"] is not None and product["sale_price"] is not None
                 base_total=float(Decimal(str(product["base_price"]))*quantity) if valid else None
@@ -558,10 +568,13 @@ class Catalog:
                 by_key.setdefault(semantic_key(product) or product_key(product), []).append(product)
             actions, result_items = [], list(issues)
             identity_aliases = []
+            cross_sources = {}
             photo_actions, photo_count, photo_products = [], 0, 0
             counts = {"new": 0, "updated": 0, "duplicates": 0, "issues": len(issues)}
             with self.connection() as db:
                 settings = self.meta(db, "settings")
+                source_index=SourceIndex(db,{p["factory"] for p in candidates})
+                conflicted_targets=source_index.conflicted_targets(candidates)
                 equivalents = semantic_index(db, {p["factory"] for p in candidates if semantic_key(p)})
                 for grouped_key, batch in by_key.items():
                     first = batch[0]
@@ -588,6 +601,10 @@ class Catalog:
                         "SELECT product_id FROM aliases WHERE identity_key IN (?,?)",
                         keys + keys).fetchall()
                     found_ids = {row[0] for row in found} | set(matches)
+                    cross_matched=False
+                    if not found_ids:
+                        found_ids=source_index.matches(first)
+                        cross_matched=bool(found_ids)
                     if len(found_ids) > 1:
                         counts["issues"] += len(batch)
                         result_items.append({**first, "status": "issue", "message": "Противоречивые совпадения в каталоге. Требуется проверка."})
@@ -601,16 +618,25 @@ class Catalog:
                             result_items.append({**first, "status": "issue",
                                 "message": "Тот же товар ранее записан с другой коллекцией. Проверьте принадлежность; новая копия не добавлена."})
                             continue
+                    if found_ids & conflicted_targets:
+                        counts["issues"] += len(batch)
+                        result_items.extend({**p,"status":"issue","message":"Разные варианты или цены подходят к одной записи. Уточните признаки; товары не объединены."} for p in batch)
+                        continue
                     existing_id = (next(iter(found_ids)),) if found_ids else None
                     existing = db.execute("SELECT * FROM products WHERE id=?", (existing_id[0],)).fetchone() if existing_id else None
                     target_id = existing["id"] if existing is not None else uuid.uuid4().hex
                     if existing is not None:
                         source_values = json.loads(existing["source_values"])
-                        if first.get("sku") and search_normalize(source_values.get("name", "")) != search_normalize(first["name"]):
+                        known_names={search_normalize(source_values.get("name",""))}
+                        known_names.update(search_normalize(s.get("name","")) for s in history(db,target_id))
+                        if not cross_matched and first.get("sku") and search_normalize(first["name"]) not in known_names:
                             counts["issues"] += len(batch)
                             result_items.append({**first, "status": "issue",
                                 "message": "Артикул найден, но название в прайсе изменилось. Требуется проверка."})
                             continue
+                        if cross_matched:
+                            cross_sources[target_id]=[source_values,dict(first)]
+                        first=enriched(source_values,first)
                         changed = any(first.get(k) != source_values.get(k) for k in SOURCE_FIELDS
                                       if k not in ("source_file", "source_sheet", "source_row"))
                         if mode == "update" and changed:
@@ -649,7 +675,7 @@ class Catalog:
                             result_items.append({**duplicate, "status": "duplicate",
                                                  "message": "Повтор строки в загруженных прайсах."})
                 session.update({"actions": actions, "identity_aliases": identity_aliases, "mode": mode, "counts": counts,
-                                "configs": configs, "details": result_items,
+                                "configs": configs, "details": result_items, "cross_sources": cross_sources,
                                 "revision": self.meta(db, "revision"), "photo_actions": photo_actions,
                                 "photo_assets": photo_assets, "photos_count": photo_count})
             return {"session_id": session_id, "mode": mode, "counts": counts,
@@ -776,6 +802,8 @@ class Catalog:
                         if found and found[0] != product_id:
                             raise ApiError("Совпадение товара изменилось. Обновите предварительный просмотр.", 409)
                         db.execute("INSERT OR IGNORE INTO aliases VALUES (?,?)", (key, product_id))
+                    for identifier,sources in session.get("cross_sources",{}).items():
+                        remember(self,db,identifier,sources)
                     for config in session["configs"]:
                         name = session["files"][config["file_id"]]["name"]
                         db.execute("INSERT OR REPLACE INTO profiles VALUES (?,?,?,?,?)",

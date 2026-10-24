@@ -160,6 +160,13 @@
       if (!result || !Array.isArray(result.items) || !Number.isFinite(result.total_base) || !Number.isFinite(result.total_sale)) throw new Error('Не удалось получить корректный расчёт. Попробуйте обновить цены.');
       const received = new Map(result.items.map(item => [item.id, item]));
       if (items.some(item => !received.has(item.id) || received.get(item.id).quantity !== item.quantity)) throw new Error('Расчёт получен не для всей подборки. Обновите цены.');
+      const redirected = items.some(item => received.get(item.id)?.product?.id && received.get(item.id).product.id !== item.id);
+      if (redirected) {
+        const mapped=items.map(item=>({id:received.get(item.id)?.product?.id || item.id,quantity:item.quantity}));
+        const totals=new Map();mapped.forEach(item=>totals.set(item.id,(totals.get(item.id)||0)+item.quantity));
+        if ([...totals.values()].some(value=>value>MAX_QUANTITY)) throw new Error('После объединения дублей количество превышает 999. Уменьшите количество в строках комплекта.');
+        items=sanitize(mapped);changed();return;
+      }
       quote = result; quoteGeneration = requestedRevision;
       cached = received;
     } catch (problem) {
