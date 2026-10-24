@@ -56,7 +56,7 @@ def build_release(root, output, url=None):
         temporary.unlink(missing_ok=True)
     manifest = {"app": APP, "version": version, "url": url or target.name,
                 "sha256": hashlib.sha256(target.read_bytes()).hexdigest(),
-                "notes": "Явное автоопределение нескольких фабрик в одном Excel-файле. Найденные фабрики видны до импорта и в предпросмотре; общее название не требуется. Кнопка восстановления автоопределения и фабрика в заголовке каждого листа."}
+                "notes": "Крупные Excel-прайсы до 160 МБ: понятные ошибки размера и проверка до загрузки. Встроенные фото до 20 МБ обрабатываются отдельно от ручных загрузок. Исправлено распознавание фабрики Динар и служебных строк с контактами."}
     (output / "latest.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
     return target
 

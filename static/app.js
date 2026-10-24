@@ -158,8 +158,18 @@ function renderImport() {
   if(imp.step===1)renderImportFiles();else if(imp.step===2)renderImportMapping();else renderImportPreview();
   $('importDialog').scrollTop=0;
 }
+function validatePriceFiles(files) {
+  const limits=ui.state?.import_limits || {file_bytes:160*1024*1024,request_bytes:240*1024*1024};
+  let encoded=64*1024;
+  for(const file of files){
+    if(!file.size)throw new Error('Файл «' + file.name + '» пустой. Выберите другой файл.');
+    if(file.size>limits.file_bytes)throw new Error('Прайс «' + file.name + '» превышает ' + Math.floor(limits.file_bytes/1024/1024) + ' МБ.');
+    encoded+=4*Math.ceil(file.size/3);
+  }
+  if(encoded>limits.request_bytes)throw new Error('Суммарный размер файлов слишком велик. Загрузите крупные прайсы по одному или через папку на компьютере.');
+}
 function renderImportFiles() {
-  $('importContent').innerHTML='<label class="dropzone" id="excelDropzone" tabindex="0">' + icon('upload') + '<h3>Перетащите сюда Excel-прайсы</h3><p>Один или несколько файлов · .xls и .xlsx</p><span class="button secondary">' + icon('folder') + 'Выбрать файлы</span><input id="excelInput" type="file" accept=".xls,.xlsx" multiple hidden></label><div id="selectedFiles" class="selected-file-list"></div><div class="import-mode"><h3 class="form-caption">Что сделать с каталогом?</h3><label class="mode-card"><input type="radio" name="importMode" value="add" ' + (imp.mode==='add'?'checked':'') + '><span><strong>Добавить только новые</strong><small>Новые коллекции и товары добавятся. Дубли будут пропущены, цены существующих товаров сохранятся.</small></span></label><label class="mode-card"><input type="radio" name="importMode" value="update" ' + (imp.mode==='update'?'checked':'') + '><span><strong>Обновить цены и добавить новые</strong><small>Новые цены заменят исходные цены из прайса. Фото и ваши правки останутся.</small></span></label></div><details class="import-path"><summary>' + icon('folder') + 'Загрузить из папки на компьютере ' + icon('down') + '</summary><label class="field">Полный путь к папке<input id="importFolderPath" value="' + esc(imp.folderPath) + '" placeholder="C:\\Users\\…\\Прайсы"></label><p class="muted small-text">Будут прочитаны Excel-файлы непосредственно из этой папки.</p></details>';
+  $('importContent').innerHTML='<label class="dropzone" id="excelDropzone" tabindex="0">' + icon('upload') + '<h3>Перетащите сюда Excel-прайсы</h3><p>Один или несколько файлов · .xls и .xlsx · до ' + Math.floor((ui.state?.import_limits?.file_bytes || 160*1024*1024)/1024/1024) + ' МБ каждый</p><span class="button secondary">' + icon('folder') + 'Выбрать файлы</span><input id="excelInput" type="file" accept=".xls,.xlsx" multiple hidden></label><div id="selectedFiles" class="selected-file-list"></div><div class="import-mode"><h3 class="form-caption">Что сделать с каталогом?</h3><label class="mode-card"><input type="radio" name="importMode" value="add" ' + (imp.mode==='add'?'checked':'') + '><span><strong>Добавить только новые</strong><small>Новые коллекции и товары добавятся. Дубли будут пропущены, цены существующих товаров сохранятся.</small></span></label><label class="mode-card"><input type="radio" name="importMode" value="update" ' + (imp.mode==='update'?'checked':'') + '><span><strong>Обновить цены и добавить новые</strong><small>Новые цены заменят исходные цены из прайса. Фото и ваши правки останутся.</small></span></label></div><details class="import-path"><summary>' + icon('folder') + 'Загрузить из папки на компьютере ' + icon('down') + '</summary><label class="field">Полный путь к папке<input id="importFolderPath" value="' + esc(imp.folderPath) + '" placeholder="C:\\Users\\…\\Прайсы"></label><p class="muted small-text">Будут прочитаны Excel-файлы непосредственно из этой папки.</p></details>';
   renderSelectedFiles();$('excelInput').onchange=e=>addExcelFiles([...e.target.files]);
   const drop=$('excelDropzone');drop.onkeydown=e=>{if(e.key==='Enter' || e.key===' '){e.preventDefault();$('excelInput').click();}};
   drop.ondragover=e=>{e.preventDefault();drop.classList.add('dragover');};drop.ondragleave=()=>drop.classList.remove('dragover');drop.ondrop=e=>{e.preventDefault();drop.classList.remove('dragover');addExcelFiles([...e.dataTransfer.files]);};
@@ -269,7 +279,7 @@ async function nextImport() {
     if(imp.step===1){
       if(!imp.files.length && !imp.folderPath?.trim())throw new Error('Выберите Excel-файлы или укажите папку с прайсами.');
       let payload;
-      if(imp.files.length){const files=[];for(const file of imp.files)files.push(await readFile(file));payload={files};}else payload={folder:imp.folderPath.trim()};
+      if(imp.files.length){validatePriceFiles(imp.files);const files=[];for(const file of imp.files)files.push(await readFile(file));payload={files};}else payload={folder:imp.folderPath.trim()};
       const inspection=await api('/api/import/inspect',payload);if(imp!==context)return;imp.inspect=inspection;imp.step=2;
     }else if(imp.step===2){
       const files=collectMappings();

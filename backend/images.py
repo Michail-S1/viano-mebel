@@ -14,8 +14,8 @@ S = "{http://schemas.openxmlformats.org/spreadsheetml/2006/main}"
 R = "{http://schemas.openxmlformats.org/officeDocument/2006/relationships}"
 D = "{http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing}"
 A = "{http://schemas.openxmlformats.org/drawingml/2006/main}"
-MAX_IMAGE = 15 * 1024 * 1024
-MAX_TOTAL = 100 * 1024 * 1024
+MAX_IMAGE = 20 * 1024 * 1024
+MAX_TOTAL = 160 * 1024 * 1024
 
 
 @dataclass
@@ -268,7 +268,8 @@ def product_pictures(path, config, products):
         mapping = {**default, **(configurations.get(sheet.name, {}).get("mapping") or {})}
         name_col = _colnum(mapping.get("name"))
         photo_columns = {col for col, value in sheet.rows.get(header_row, {}).items()
-                         if any(term in _header_identity(value) for term in ("фото", "изображен", "картин"))}
+                         if any(term in _header_identity(value) for term in ("фото", "изображен", "картин"))
+                         or _header_identity(value) in ("видкровати", "внешнийвид", "внешнийвидизделия")}
         for picture in (item for item in pictures if item.sheet == sheet.name):
             if picture.row <= header_row:
                 continue  # Title banners, factory logos and cover graphics.

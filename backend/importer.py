@@ -32,7 +32,7 @@ DIMENSION_PATTERN = re.compile(
 TRIPLE_SLASH = re.compile(r"(?<!\d)\d{2,5}/\d{2,5}/\d{2,5}(?!\d)")
 SERVICE = re.compile(
     r"прай[сc]|прай-лист|оптовый|отдел (?:продаж|рекламац)|@|https?://|"
-    r"e-mail|тел(?:ефон)?\s*[:.]|тел[.]?(?:\s|\+)|"
+    r"^звонить\b|писать по вопросам|e-mail|тел(?:ефон)?\s*[:.]|тел[.]?(?:\s|\+)|"
     r"республика крым|г[.]белогорск|нижнегорский|ул[.]|"
     r"итогов|^итого\b|^всего\b|сумма\s*[(]|наценка|скидка\s*[(]|"
     r"содержание|сняти[ея].*производств|важная информация|"
@@ -291,11 +291,11 @@ def _factory(filename: str, sheets: list[Sheet]) -> str:
     text = filename.casefold().replace("ё", "е")
     if re.search(r"регион[\s_-]*058", text):
         return "Регион 058"
-    known = [("бтс", "БТС"), ("bts", "БТС"), ("регина", "Регина"), ("стенд", "Стендмебель"), ("альбина", "Альбина"),
+    known = [("динар", "Динар"), ("dinar", "Динар"), ("бтс", "БТС"), ("bts", "БТС"), ("регина", "Регина"), ("стенд", "Стендмебель"), ("альбина", "Альбина"),
              ("росток", "Росток"), ("эста", "ЭСТА Мебель"), ("аленушка", "Алёнушка"),
              ("дсв", "ДСВ"), ("миф", "МИФ"), ("пирамида", "Пирамида")]
     for marker, name in known:
-        if marker in text:
+        if (re.search(r"(?<![а-яa-z0-9])"+marker+r"(?![а-яa-z0-9])",text) if marker in ("дсв","миф","бтс","bts") else marker in text):
             return name
     if re.search(r"sv[- _]?мебель", text):
         return "SV-Мебель"
@@ -305,7 +305,8 @@ def _factory(filename: str, sheets: list[Sheet]) -> str:
             for value in sheet.rows[row].values():
                 raw = normalize_text(value)
                 for marker, name in known:
-                    if marker in raw.casefold().replace("ё", "е"):
+                    normalized = raw.casefold().replace("ё", "е")
+                    if (re.search(r"(?<![а-яa-z0-9])"+marker+r"(?![а-яa-z0-9])",normalized) if marker in ("дсв","миф","бтс","bts") else marker in normalized):
                         return name
     return ""
 

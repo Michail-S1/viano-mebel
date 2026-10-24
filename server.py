@@ -32,7 +32,7 @@ sys.path.insert(0, str(ROOT / "vendor"))
 from backend.importer import inspect_file, parse_file, product_key, normalize_text
 from backend.colors import derive_color
 from backend.catalog_identity import semantic_key, semantic_index, original_key, repair_plan, apply_plan
-from backend.images import product_pictures
+from backend.images import product_pictures, MAX_IMAGE as MAX_EXCEL_IMAGE_BYTES
 from backend.dimensions import make_matcher
 from backend.search import is_short_word, whole_word_matches
 from backend.avito import Avito
@@ -42,11 +42,12 @@ try:
 except ImportError:
     Image = ImageOps = None
 
-VERSION = "1.4.1"
+VERSION = "1.4.2"
 TEXT_FIELDS = ("name", "factory", "collection", "sku", "color", "dimensions", "variant")
 SOURCE_FIELDS = TEXT_FIELDS + ("base_price", "source_file", "source_sheet", "source_row", "identity_context", "name_context")
 DEFAULTS = {"markup_percent": 20, "fixed_add": 1000, "rounding": "ruble"}
 MAX_BODY = 240 * 1024 * 1024
+MAX_EXCEL_BYTES = 160 * 1024 * 1024
 
 class ApiError(Exception):
     def __init__(self, message, status=400):
@@ -77,12 +78,16 @@ def decode_file(item, limit=MAX_BODY):
         raise ApiError("Некорректное содержимое файла.")
     if content.startswith("data:"):
         content = content.split(",", 1)[-1]
+    if len(content) > 4 * ((limit + 2) // 3):
+        raise ApiError(f"Файл превышает {limit // (1024 * 1024)} МБ.")
     try:
         value = base64.b64decode(content, validate=True)
     except Exception:
         raise ApiError("Не удалось прочитать файл: некорректный формат данных.")
-    if not value or len(value) > limit:
-        raise ApiError("Файл пустой или превышает допустимый размер.")
+    if not value:
+        raise ApiError("Файл пустой. Выберите другой файл.")
+    if len(value) > limit:
+        raise ApiError(f"Файл превышает {limit // (1024 * 1024)} МБ.")
     return value
 
 def clean_name(name):
@@ -253,7 +258,8 @@ class Catalog:
                     "last_import": imports[0]["created_at"] if imports else None},
                     "settings": self.meta(db, "settings"), "factories": factories,
                     "collections": collections_list, "imports": imports, "profiles": profiles,
-                    "folder": self.meta(db, "folder")}
+                    "folder": self.meta(db, "folder"),
+                    "import_limits": {"file_bytes": MAX_EXCEL_BYTES, "request_bytes": MAX_BODY}}
 
     def list_products(self, params):
         with self.lock, self.connection() as db:
@@ -399,7 +405,7 @@ class Catalog:
             file_dir = session_dir / uuid.uuid4().hex
             file_dir.mkdir()
             path = file_dir / filename
-            path.write_bytes(decode_file(entry, 80 * 1024 * 1024))
+            path.write_bytes(decode_file(entry, MAX_EXCEL_BYTES))
             files.append((path, filename))
         paths = list(payload.get("paths", []))
         if payload.get("folder"):
@@ -412,8 +418,10 @@ class Catalog:
             path = Path(path_value).expanduser().resolve()
             if not path.is_file() or path.suffix.lower() not in (".xls", ".xlsx"):
                 raise ApiError("Excel-файл не найден: " + str(path))
-            if path.stat().st_size > 80 * 1024 * 1024:
-                raise ApiError("Прайс превышает 80 МБ.")
+            if not path.stat().st_size:
+                raise ApiError(f"Прайс «{path.name}» пустой. Выберите другой файл.")
+            if path.stat().st_size > MAX_EXCEL_BYTES:
+                raise ApiError(f"Прайс «{path.name}» превышает {MAX_EXCEL_BYTES // (1024 * 1024)} МБ.")
             # Freeze a source snapshot, so the confirmed preview matches what is committed.
             file_dir = session_dir / uuid.uuid4().hex
             file_dir.mkdir()
@@ -536,7 +544,7 @@ class Catalog:
                             continue
                         if digest not in photo_assets:
                             try:
-                                data, extension = self.prepare_photo(picture["data"])
+                                data, extension = self.prepare_photo(picture["data"], limit=MAX_EXCEL_IMAGE_BYTES)
                                 photo_assets[digest] = {"data": data, "extension": extension, "name": clean_name(picture["name"])}
                             except ApiError as error:
                                 rejected_photos.add(digest)
@@ -822,9 +830,9 @@ class Catalog:
             self.bump(db)
             return settings
 
-    def prepare_photo(self, data):
-        if not data or len(data) > 15*1024*1024:
-            raise ApiError('Фото пустое или превышает 15 МБ.')
+    def prepare_photo(self, data, *, limit=15*1024*1024):
+        if not data or len(data) > limit:
+            raise ApiError(f"Фото пустое или превышает {limit // (1024 * 1024)} МБ.")
         if Image is not None:
             try:
                 with Image.open(io.BytesIO(data)) as image:
