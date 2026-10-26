@@ -1,7 +1,9 @@
 """Local furniture catalog. Personal data stays local; network is used only for updates."""
 import argparse
 import base64
+import bisect
 import collections
+import copy
 import csv
 import hashlib
 import io
@@ -43,7 +45,7 @@ try:
 except ImportError:
     Image = ImageOps = None
 
-VERSION = "1.4.3"
+VERSION = "1.4.4"
 TEXT_FIELDS = ("name", "factory", "collection", "sku", "color", "dimensions", "variant")
 SOURCE_FIELDS = TEXT_FIELDS + ("base_price", "source_file", "source_sheet", "source_row", "identity_context", "name_context")
 DEFAULTS = {"markup_percent": 20, "fixed_add": 1000, "rounding": "ruble"}
@@ -115,6 +117,8 @@ class Catalog:
         self.incoming.mkdir(exist_ok=True)
         self.lock = threading.RLock()
         self.sessions = {}
+        self._read_cache = collections.OrderedDict()
+        self._price_steps = None
         self.stop_event = threading.Event()
         with self.connection() as db:
             db.executescript("""
@@ -151,6 +155,7 @@ class Catalog:
                                            "last_scan": None, "error": None, "pending_session": None}),
                                ("folder_hashes", {})):
                 db.execute("INSERT OR IGNORE INTO metadata VALUES (?,?)", (key, compact(value)))
+            self.ensure_read_indexes(db)
         with self.connection() as db:
             folder = self.meta(db, "folder") or {}
             if folder.get("pending_session"):
@@ -205,7 +210,30 @@ class Catalog:
     def set_meta(self, db, key, value):
         db.execute("INSERT OR REPLACE INTO metadata VALUES (?,?)", (key, compact(value)))
 
+    def ensure_read_indexes(self, db):
+        # Narrow search indexes avoid reading large source JSON for every candidate.
+        for name, columns in (
+            ("name", "name,id"), ("price", "base_price,id"),
+            ("recent", "imported_at DESC,id"), ("dimensions", "dimensions"),
+            ("search", "search_text,id"),
+            ("catalog", "factory,collection,source_row,id"),
+        ):
+            db.execute(f"CREATE INDEX IF NOT EXISTS idx_read_{name} ON products({columns})")
+
+    def cached_read(self, key, value=None):
+        if value is not None:
+            self._read_cache[key] = copy.deepcopy(value)
+            self._read_cache.move_to_end(key)
+            while len(self._read_cache) > 48:
+                self._read_cache.popitem(last=False)
+            return value
+        if key in self._read_cache:
+            self._read_cache.move_to_end(key)
+            return copy.deepcopy(self._read_cache[key])
+
     def bump(self, db):
+        self._read_cache.clear()
+        self._price_steps = None
         self.set_meta(db, "revision", int(self.meta(db, "revision") or 0) + 1)
         if hasattr(self, "avito"):
             self.avito.invalidate(db, "Каталог или настройки изменились; подготовьте план заново")
@@ -245,8 +273,17 @@ class Catalog:
                 raise ApiError("Товар не найден.", 404)
             return self.serialize_product(db, row)
 
-    def state(self):
+    def state(self, since=None):
         with self.lock, self.connection() as db:
+            revision = self.meta(db, "revision")
+            folder = self.meta(db, "folder")
+            if since is not None and str(revision) == str(since):
+                return {"unchanged": True, "version": VERSION, "revision": revision, "folder": folder}
+            key = ("state", revision)
+            cached = self.cached_read(key)
+            if cached is not None:
+                cached["folder"] = folder
+                return cached
             factories = [dict(r) for r in db.execute(
                 "SELECT factory name,count(*) count FROM products GROUP BY factory ORDER BY factory")]
             collections_list = [dict(r) for r in db.execute(
@@ -262,25 +299,30 @@ class Catalog:
                 "SELECT family,name,factory,updated_at FROM profiles ORDER BY updated_at DESC")]
             total = db.execute("SELECT count(*) FROM products").fetchone()[0]
             photos = db.execute("SELECT count(DISTINCT product_id) FROM photos").fetchone()[0]
-            return {"version": VERSION, "revision": self.meta(db,"revision"), "stats": {"total": total, "factories": len(factories),
+            return self.cached_read(key, {"version": VERSION, "revision": revision, "stats": {"total": total, "factories": len(factories),
                     "collections": len(collections_list), "with_photos": photos,
                     "last_import": imports[0]["created_at"] if imports else None},
                     "settings": self.meta(db, "settings"), "factories": factories,
                     "collections": collections_list, "imports": imports, "profiles": profiles,
-                    "folder": self.meta(db, "folder"),
-                    "import_limits": {"file_bytes": MAX_EXCEL_BYTES, "request_bytes": MAX_BODY}}
+                    "folder": folder,
+                    "import_limits": {"file_bytes": MAX_EXCEL_BYTES, "request_bytes": MAX_BODY}})
 
     def list_products(self, params):
         with self.lock, self.connection() as db:
+            key = ("products", self.meta(db, "revision"), tuple(sorted(params.items())))
+            cached = self.cached_read(key)
+            if cached is not None:
+                return cached
             settings = self.meta(db, "settings")
             sql, values = ["1=1"], []
             db.create_function("whole_word_matches", 2, whole_word_matches)
             for term in search_normalize(params.get("q", "")).split():
-                sql.append("instr(search_text,?)>0")
+                condition = "instr(search_text,?)>0"
                 values.append(term)
                 if is_short_word(term):
-                    sql.append("whole_word_matches(search_text,?)=1")
+                    condition += " AND whole_word_matches(search_text,?)=1"
                     values.append(term)
+                sql.append("id IN (SELECT id FROM products INDEXED BY idx_read_search WHERE " + condition + ")")
             for field in ("factory", "collection"):
                 if params.get(field):
                     sql.append(field + "=?")
@@ -289,7 +331,6 @@ class Catalog:
                 sql.append("EXISTS(SELECT 1 FROM photos WHERE photos.product_id=products.id)")
             if params.get("has_photo") in ("0", "false", "no"):
                 sql.append("NOT EXISTS(SELECT 1 FROM photos WHERE photos.product_id=products.id)")
-            db.create_function("sale_price", 1, lambda x: sale_price(x, settings))
             for param, comparator in (("min", ">="), ("max", "<=")):
                 if params.get(param) not in (None, ""):
                     try:
@@ -298,8 +339,16 @@ class Catalog:
                             raise ValueError()
                     except ValueError:
                         raise ApiError("Укажите корректную цену для фильтра.")
-                    sql.append("sale_price(base_price)" + comparator + "?")
-                    values.append(price)
+                    if self._price_steps is None:
+                        bases = [r[0] for r in db.execute("SELECT DISTINCT base_price FROM products WHERE base_price IS NOT NULL ORDER BY base_price")]
+                        self._price_steps = (bases, [sale_price(base, settings) for base in bases])
+                    bases, prices = self._price_steps
+                    position = bisect.bisect_left(prices, price) if param == "min" else bisect.bisect_right(prices, price) - 1
+                    if position < 0 or position >= len(bases):
+                        sql.append("0=1")
+                    else:
+                        sql.append("base_price" + comparator + "?")
+                        values.append(bases[position])
             try:
                 dimension_matcher = make_matcher(params)
             except ValueError as error:
@@ -322,8 +371,11 @@ class Catalog:
                         elif len(dimension_filter["examples"]) < 3:
                             dimension_filter["examples"].append(size)
             if dimension_matcher:
-                db.create_function("dimension_matches", 1, dimension_matcher)
-                sql.append("dimension_matches(dimensions)=1")
+                # Match each distinct size once, then let SQLite filter indexed values.
+                sizes = db.execute("SELECT DISTINCT dimensions FROM products").fetchall()
+                db.execute("CREATE TEMP TABLE matched_dimensions(value TEXT PRIMARY KEY) WITHOUT ROWID")
+                db.executemany("INSERT INTO matched_dimensions VALUES (?)", ((r[0],) for r in sizes if dimension_matcher(r[0])))
+                sql.append("dimensions IN (SELECT value FROM matched_dimensions)")
             where = " AND ".join(sql)
             sort = {"name": "name,id", "name_desc": "name DESC,id", "price_asc": "base_price,id",
                     "price_desc": "base_price DESC,id", "newest": "imported_at DESC,id",
@@ -338,8 +390,8 @@ class Catalog:
             page = min(page, pages)
             rows = db.execute("SELECT * FROM products WHERE " + where + " ORDER BY " + sort +
                               " LIMIT ? OFFSET ?", values + [page_size, (page-1)*page_size]).fetchall()
-            return {"items": [self.serialize_product(db, r, settings) for r in rows],
-                    "total": total, "page": page, "pages": pages, "dimension_filter": dimension_filter}
+            return self.cached_read(key, {"items": [self.serialize_product(db, r, settings) for r in rows],
+                    "total": total, "page": page, "pages": pages, "dimension_filter": dimension_filter})
 
     def quote_selection(self, payload):
         items = payload.get("items")
@@ -1062,6 +1114,7 @@ class Catalog:
             self.sessions.clear()
             self.avito.import_sessions.clear()
             with self.connection() as db:
+                self.ensure_read_indexes(db)
                 folder = self.meta(db, "folder") or {}
                 folder.update({"watch": False, "status": "idle", "pending_session": None, "error": None})
                 self.set_meta(db, "folder", folder)
@@ -1157,17 +1210,20 @@ class Handler(BaseHTTPRequestHandler):
         if origin and origin not in {"http://"+value for value in valid}:
             raise ApiError("Запрос с другого сайта заблокирован.", 403)
 
-    def send_bytes(self, data, content_type, status=200, filename=None):
+    def send_bytes(self, data, content_type, status=200, filename=None, cache_control="no-store", etag=None):
         self.send_response(status)
         self.send_header("Content-Type", content_type)
-        self.send_header("Content-Length", str(len(data)))
+        if status != 304:
+            self.send_header("Content-Length", str(len(data)))
         self.send_header("X-Content-Type-Options", "nosniff")
-        self.send_header("Cache-Control", "no-store")
+        self.send_header("Cache-Control", cache_control)
+        if etag:
+            self.send_header("ETag", etag)
         self.send_header("Referrer-Policy", "no-referrer")
         if filename:
             self.send_header("Content-Disposition", 'attachment; filename="' + filename + '"')
         self.end_headers()
-        if self.command != "HEAD":
+        if self.command != "HEAD" and status != 304:
             self.wfile.write(data)
 
     def send_json(self, data, status=200):
@@ -1305,7 +1361,7 @@ class Handler(BaseHTTPRequestHandler):
                 if path == "/api/update":
                     return self.send_json(self.update_state())
                 if path == "/api/state":
-                    return self.send_json(self.catalog.state())
+                    return self.send_json(self.catalog.state(parse_qs(parsed.query).get("since", [None])[0]))
                 if re.fullmatch(r"/api/imports/[a-f0-9]{32}/report",path):
                     return self.send_bytes(self.catalog.report(path.split("/")[3]), "text/csv; charset=utf-8", filename="import-issues.csv")
                 if re.fullmatch(r"/api/import/report/[a-f0-9]{32}",path):
@@ -1343,10 +1399,20 @@ class Handler(BaseHTTPRequestHandler):
                         raise ApiError("Файл не найден.", 404)
                 if not file.is_file():
                     raise ApiError("Страница не найдена.", 404)
+                is_index = file == (ROOT / "static" / "index.html").resolve()
+                content_type = mimetypes.guess_type(file.name)[0] or "application/octet-stream"
+                cache_control, etag = "no-store", None
+                if not is_index:
+                    stat = file.stat()
+                    etag = '"' + hashlib.sha256((str(file)+str(stat.st_mtime_ns)+str(stat.st_size)+VERSION).encode()).hexdigest() + '"'
+                    versioned = not path.startswith("/photos/") and parse_qs(parsed.query).get("v") == [VERSION]
+                    cache_control = "private, max-age=31536000, immutable" if versioned else "private, no-cache"
+                    if self.headers.get("If-None-Match") == etag:
+                        return self.send_bytes(b"", content_type, 304, cache_control=cache_control, etag=etag)
                 content = file.read_bytes()
-                if file == (ROOT / "static" / "index.html").resolve():
+                if is_index:
                     content = content.replace(b"__APP_VERSION__", VERSION.encode("ascii"))
-                return self.send_bytes(content, mimetypes.guess_type(file.name)[0] or "application/octet-stream")
+                return self.send_bytes(content, content_type, cache_control=cache_control, etag=etag)
             if self.command == "POST":
                 payload = self.body()
                 if path == "/api/selection/quote":
@@ -1382,7 +1448,7 @@ class Handler(BaseHTTPRequestHandler):
             raise ApiError("Метод или страница не найдены.", 404)
         except ApiError as error:
             self.send_json({"error": str(error)}, error.status)
-        except (BrokenPipeError, ConnectionResetError):
+        except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
             pass
         except Exception as error:
             traceback.print_exc()

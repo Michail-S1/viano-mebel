@@ -309,7 +309,7 @@ class CatalogAPI(unittest.TestCase):
         for asset in ('app.js','kit.js','avito.js','styles.css','kit.css'):
             self.assertIn('/static/'+asset+'?v='+VERSION,root)
         with urllib.request.urlopen(self.base+'/static/app.js?v='+VERSION) as response:
-            self.assertEqual(response.headers['Cache-Control'],'no-store')
+            self.assertIn('immutable',response.headers['Cache-Control'])
             self.assertIn(b'importFactorySummary',response.read())
 
     def test_static_styles_and_root_are_served(self):
@@ -695,6 +695,26 @@ class CatalogAPI(unittest.TestCase):
         self.expect_http_error("POST","/api/update/install",{"source":"https://example.com/latest.json"},statuses=(403,))
         self.expect_http_error("POST","/api/update/check",{"source":"http://example.com/latest.json"},statuses=(400,))
         self.assertEqual(self.request("GET","/api/state")["stats"]["total"],0)
+
+    def test_unchanged_poll_and_conditional_local_assets(self):
+        state = self.request('GET', '/api/state')
+        probe = self.request('GET', '/api/state?since=' + str(state['revision']))
+        self.assertTrue(probe['unchanged'])
+        self.assertNotIn('collections', probe)
+        for path, expected in (('/static/app.js?v='+state['version'], 'immutable'),
+                               ('/static/styles.css', 'no-cache')):
+            with urllib.request.urlopen(self.base+path) as response:
+                etag = response.headers['ETag']
+                self.assertIn(expected, response.headers['Cache-Control'])
+                self.assertTrue(response.read())
+            req = urllib.request.Request(self.base+path, headers={'If-None-Match':etag})
+            with self.assertRaises(urllib.error.HTTPError) as caught:
+                urllib.request.urlopen(req)
+            self.assertEqual(caught.exception.code, 304)
+            self.assertEqual(caught.exception.read(), b'')
+        for path in ('/', '/api/state'):
+            with urllib.request.urlopen(self.base+path) as response:
+                self.assertEqual(response.headers['Cache-Control'], 'no-store')
 
 
 if __name__ == "__main__":

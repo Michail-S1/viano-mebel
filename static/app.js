@@ -2,16 +2,17 @@
 const $ = (id) => document.getElementById(id);
 const esc = (value) => String(value == null ? '' : value).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const icon = (name, extra) => '<svg class="icon ' + (extra || '') + '" aria-hidden="true"><use href="#i-' + name + '"/></svg>';
-const number = (value) => new Intl.NumberFormat('ru-RU', {maximumFractionDigits:2}).format(Number(value) || 0);
+const numberFormat = new Intl.NumberFormat('ru-RU', {maximumFractionDigits:2});
+const number = (value) => numberFormat.format(Number(value) || 0);
 const money = (value) => value === null || value === undefined || value === '' ? 'Цена не указана' : number(value) + ' ₽';
 const date = (value, full) => { if (!value) return ''; const d = new Date(value); return isNaN(d) ? String(value) : new Intl.DateTimeFormat('ru-RU', {day:'2-digit',month:'2-digit',year:'numeric',...(full ? {hour:'2-digit',minute:'2-digit'} : {})}).format(d); };
 const ui = {state:null, products:null, view:'grid', filters:{dimensions:'',width_min:'',width_max:'',height_min:'',height_max:'',depth_min:'',depth_max:'',dimension_order:'',dimension_unit:'',q:'',factory:'',collection:'',min:'',max:'',has_photo:'',sort:'name'}, page:1, request:0, product:null, currentPhoto:null, edit:false};
 let imp = {step:1,files:[],inspect:null,preview:null,mode:'add',filter:'all'};
 let restoreFile = null;
-async function api(path, data, method) {
+async function api(path, data, method, signal) {
   let response;
-  try { response = await fetch(path, {method:method || (data === undefined ? 'GET' : 'POST'), headers:data === undefined ? {} : {'Content-Type':'application/json'}, ...(data === undefined ? {} : {body:JSON.stringify(data)})}); }
-  catch (e) { throw new Error('Не удалось связаться с каталогом. Убедитесь, что локальная программа запущена.'); }
+  try { response = await fetch(path, {signal, method:method || (data === undefined ? 'GET' : 'POST'), headers:data === undefined ? {} : {'Content-Type':'application/json'}, ...(data === undefined ? {} : {body:JSON.stringify(data)})}); }
+  catch (e) { if(e.name==='AbortError')throw e;throw new Error('Не удалось связаться с каталогом. Убедитесь, что локальная программа запущена.'); }
   let result;
   try { result = await response.json(); } catch (e) { throw new Error('Программа вернула неожиданный ответ. Попробуйте ещё раз.'); }
   if (!response.ok) { const error=new Error(result.error || 'Не удалось выполнить операцию.'); error.status=response.status; throw error; }
@@ -54,10 +55,11 @@ function renderState() {
 async function refreshState() { ui.state=await api('/api/state');renderState();window.CatalogKit?.refresh();return ui.state; }
 function filterActive() {return ['q','factory','collection','min','max','has_photo','dimensions','width_min','width_max','height_min','height_max','depth_min','depth_max'].some(k=>!!ui.filters[k]);}
 async function loadProducts() {
+  ui.productController?.abort();ui.productController=new AbortController();
   const request=++ui.request; $('catalogBody').setAttribute('aria-busy','true');showError('catalogError',null);
   const params=new URLSearchParams({...ui.filters,page:ui.page,page_size:36});
-  try {const data=await api('/api/products?' + params);if(request!==ui.request)return;ui.products=data;renderProducts();}
-  catch(e){if(request===ui.request){showError('catalogError',e);$('catalogBody').innerHTML='<div class="no-results">' + icon('folder') + '<h3>Каталог недоступен</h3><p>Проверьте, запущена ли программа, и попробуйте снова.</p><button class="button secondary" data-action="retry">Повторить</button></div>';}}
+  try {const data=await api('/api/products?' + params,undefined,undefined,ui.productController.signal);if(request!==ui.request)return;ui.products=data;renderProducts();}
+  catch(e){if(request===ui.request && e.name!=='AbortError'){showError('catalogError',e);$('catalogBody').innerHTML='<div class="no-results">' + icon('folder') + '<h3>Каталог недоступен</h3><p>Проверьте, запущена ли программа, и попробуйте снова.</p><button class="button secondary" data-action="retry">Повторить</button></div>';}}
   finally {if(request===ui.request)$('catalogBody').setAttribute('aria-busy','false');}
 }
 function renderProducts() {
@@ -463,7 +465,22 @@ async function requestUpdate(install){
 $('checkUpdate').onclick=()=>requestUpdate(false);$('installUpdate').onclick=()=>requestUpdate(true);
 $('updateSource').oninput=()=>{$('installUpdate').disabled=true;};
 bootstrap();
-setInterval(async()=>{if(!ui.state || document.querySelector('dialog[open]'))return;try{const previous=ui.state.revision;const previousImport=ui.state.stats.last_import;ui.state=await api('/api/state');renderState();if((previous!==undefined && previous!==ui.state.revision) || previousImport!==ui.state.stats.last_import)await loadProducts();}catch(e){}},20000);
+let statePolling=false;
+setInterval(async()=>{
+  if(statePolling || document.hidden || !ui.state || document.querySelector('dialog[open]'))return;
+  statePolling=true;
+  try{
+    const current=ui.state, next=await api('/api/state?since='+encodeURIComponent(current.revision));
+    if(ui.state!==current)return;
+    if(next.unchanged){
+      if(JSON.stringify(current.folder)!==JSON.stringify(next.folder)){
+        current.folder=next.folder;$('folderSummary').textContent=next.folder?.path || 'Выберите папку для удобного обновления';updateFolderNotice();
+      }
+      return;
+    }
+    ui.state=next;renderState();window.CatalogKit?.refresh();await loadProducts();
+  }catch(e){}finally{statePolling=false;}
+},20000);
 
 function updateSheetTally(fi){const boxes=[...document.querySelectorAll('[data-sheet-selected][data-fi="'+fi+'"]')];const label=document.querySelector('[data-sheet-tally="'+fi+'"]');if(label)label.textContent='Выбрано '+boxes.filter(el=>el.checked).length+' из '+boxes.length+' листов';}
 document.addEventListener('change',e=>{if(e.target.matches('[data-sheet-selected]')){updateSheetTally(e.target.dataset.fi);refreshImportFactories(e.target.dataset.fi);}});

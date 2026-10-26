@@ -7,8 +7,10 @@
   const MAX_QUANTITY = 999;
   const MAX_LINES = 500;
   const escape = value => String(value == null ? '' : value).replace(/[&<>"']/g, char => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]));
-  const count = value => new Intl.NumberFormat('ru-RU').format(value);
-  const currency = value => Number.isFinite(value) ? new Intl.NumberFormat('ru-RU', {maximumFractionDigits:2}).format(value) + ' ₽' : '—';
+  const countFormat = new Intl.NumberFormat('ru-RU');
+  const currencyFormat = new Intl.NumberFormat('ru-RU', {maximumFractionDigits:2});
+  const count = value => countFormat.format(value);
+  const currency = value => Number.isFinite(value) ? currencyFormat.format(value) + ' ₽' : '—';
   const symbols = {
     kit:'<rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><path d="M17.5 13v9M13 17.5h9"/>',
     plus:'<path d="M12 5v14M5 12h14"/>', minus:'<path d="M5 12h14"/>',
